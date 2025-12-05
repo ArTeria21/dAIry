@@ -19,6 +19,14 @@ MESSAGES = {
         LANG_EN: "✅ Voice note saved to today's page.",
         LANG_RU: "✅ Голосовая заметка сохранена.",
     },
+    "save_synced": {
+        LANG_EN: "✅ Saved and synced.",
+        LANG_RU: "✅ Сохранено и синхронизировано.",
+    },
+    "save_local_only": {
+        LANG_EN: "✅ Saved locally, but sync failed.",
+        LANG_RU: "✅ Сохранено локально, но синхронизация не удалась.",
+    },
     "voice_pending_decision": {
         LANG_EN: "You still have a voice note waiting. Confirm or edit it first.",
         LANG_RU: "У вас есть неподтверждённая голосовая заметка. Сначала подтвердите или исправьте её.",
@@ -79,6 +87,14 @@ MESSAGES = {
         LANG_EN: "Nothing to save.",
         LANG_RU: "Нет данных для сохранения.",
     },
+    "today_empty": {
+        LANG_EN: "No entries for today yet.",
+        LANG_RU: "За сегодня пока нет записей.",
+    },
+    "today_header": {
+        LANG_EN: "📓 Today's note ({date})",
+        LANG_RU: "📓 Заметки за сегодня ({date})",
+    },
 }
 
 
@@ -100,3 +116,12 @@ def format_transcription_preview(transcription: str, lang: str | None = None) ->
     title = t("voice_preview_title", lang)
     question = t("voice_preview_question", lang)
     return f"<b>{title}</b>\n<blockquote>{safe_text}</blockquote>\n{question}"
+
+
+def format_today_note(date_label: str, content: str, lang: str | None = None) -> str:
+    """Render today's note with a localized heading."""
+    title = t("today_header", lang).format(date=escape(date_label))
+    safe_body = escape(content.strip())
+    if not safe_body:
+        return title
+    return f"{title}\n\n{safe_body}"

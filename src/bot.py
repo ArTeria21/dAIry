@@ -7,6 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from dairy_bot.config import Settings
 from dairy_bot.handlers.journal import router as journal_router
 from dairy_bot.middlewares.auth import AuthMiddleware
+from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.scheduler import setup_scheduler
 
 
@@ -17,12 +18,16 @@ async def main() -> None:
     )
 
     settings = Settings()
+    git_service = GitService(
+        settings.journal_dir, enabled=settings.git_enabled, timezone=settings.timezone
+    )
     bot = Bot(
         token=settings.bot_token.get_secret_value(),
         default=DefaultBotProperties(parse_mode="HTML"),
     )
     dispatcher = Dispatcher()
     dispatcher["settings"] = settings
+    dispatcher["git_service"] = git_service
 
     auth_middleware = AuthMiddleware(settings.allowed_user_id)
     dispatcher.message.middleware(auth_middleware)

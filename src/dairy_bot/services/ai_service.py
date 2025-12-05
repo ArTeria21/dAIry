@@ -36,7 +36,7 @@ async def transcribe_audio(path: Path, settings: Settings) -> str:
 
     try:
         completion = await client.chat.completions.create(
-            model=settings.voxtrail_model_name,
+            model=settings.voice_model_name,
             messages=[
                 {
                     "role": "user",
