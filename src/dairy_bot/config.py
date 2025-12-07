@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     voice_model_name: str = Field(
         default="mistralai/voxtral-small-24b-2507",
         alias="VOICE_MODEL_NAME",
-        validation_alias=AliasChoices("VOICE_MODEL_NAME", "VOXTRAIL_MODEL_NAME"),
+        validation_alias=AliasChoices("VOICE_MODEL_NAME"),
     )
     journal_dir: Path = Field(
         ...,

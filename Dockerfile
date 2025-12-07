@@ -22,5 +22,8 @@ RUN uv sync --frozen --no-cache
 
 ENV PATH="/app/.venv/bin:${PATH}"
 
+# Разрешаем git работать с примонтированной директорией /data, даже если у неё другой владелец
+RUN git config --global --add safe.directory /data
+
 CMD ["python", "src/bot.py"]
 

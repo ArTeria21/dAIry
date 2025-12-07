@@ -32,7 +32,7 @@ In an era of closed platforms, **dAIry** focuses on data sovereignty.
 ### ✨ Key Features
 
 - **📝 Text & Voice Journaling:** Send text messages or voice notes.
-- **🎙️ AI Transcription:** Voice messages are automatically transcribed using state-of-the-art models (via OpenRouter/VoxTrail) before saving.
+- **🎙️ AI Transcription:** Voice messages are automatically transcribed using state-of-the-art models (via OpenRouter/VoxTral) before saving.
 - **🔄 Auto-Git Sync:** Automatically pulls changes before writing and pushes updates after saving. Keeps your Obsidian vault in sync across your phone and laptop.
 - **🔒 Privacy Focused:** Single-user architecture. The bot only talks to _you_.
 - **⏰ Daily Reminders:** Gentle nudge at 20:00 (configurable) if you haven't written anything today.
@@ -132,7 +132,7 @@ src/
 ### ✨ Ключевые Возможности
 
 - **📝 Текст и Голос:** Отправляйте текстовые сообщения или голосовые заметки.
-- **🎙️ AI Транскрибация:** Голосовые сообщения автоматически расшифровываются в текст с помощью современных моделей (через OpenRouter/VoxTrail).
+- **🎙️ AI Транскрибация:** Голосовые сообщения автоматически расшифровываются в текст с помощью современных моделей (через OpenRouter/VoxTral).
 - **🔄 Авто-Git Sync:** Бот делает `git pull` перед записью и `git push` после. Ваш Obsidian всегда актуален и на телефоне, и на ноутбуке.
 - **🔒 Приватность:** Бот работает только для одного пользователя (вас).
 - **⏰ Напоминания:** Мягкое напоминание в 20:00 (настраиваемо), если вы сегодня ничего не писали.
