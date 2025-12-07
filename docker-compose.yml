@@ -1,0 +1,12 @@
+services:
+  dairy-bot:
+    build: .
+    image: dairy-bot:latest
+    env_file:
+      - .env
+    environment:
+      JOURNAL_DIR: /data
+    volumes:
+      - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/data
+      - ${HOME}/.ssh:/root/.ssh:ro
+    restart: unless-stopped
