@@ -9,4 +9,5 @@ services:
     volumes:
       - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/data
       - ${HOME}/.ssh:/root/.ssh:ro
+    init: true
     restart: unless-stopped
