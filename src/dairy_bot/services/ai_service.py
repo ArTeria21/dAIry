@@ -52,6 +52,11 @@ async def transcribe_audio(path: Path, settings: Settings) -> str:
         )
     except Exception as exc:  # pragma: no cover - best-effort guard
         raise RuntimeError("Transcription failed") from exc
+    finally:
+        try:
+            await client.close()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            pass
 
     choice = completion.choices[0].message.content
     return _decode_message_content(choice)

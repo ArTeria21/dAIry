@@ -2,6 +2,7 @@ import asyncio
 import logging
 import tempfile
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -22,6 +23,8 @@ from dairy_bot.texts import LANG_BUTTONS, messages
 
 router = Router()
 logger = logging.getLogger(__name__)
+MAX_TG_MESSAGE_LEN = 4000
+_journal_lock: asyncio.Lock | None = None
 
 
 class VoiceStates(StatesGroup):
@@ -51,15 +54,68 @@ def _user_lang(user_id: int | None) -> str:
     return get_language(user_id or 0)
 
 
+def _split_long_line(line: str, max_len: int) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for char in line:
+        char_len = len(escape(char))
+        if current_len + char_len > max_len and current:
+            parts.append("".join(current))
+            current = [char]
+            current_len = char_len
+        else:
+            current.append(char)
+            current_len += char_len
+    if current:
+        parts.append("".join(current))
+    return parts
+
+
+def _split_text_for_html(text: str, max_len: int) -> list[str]:
+    if not text:
+        return []
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in text.splitlines(keepends=True):
+        line_len = len(escape(line))
+        if line_len > max_len:
+            if current:
+                chunks.append("".join(current).rstrip("\n"))
+                current = []
+                current_len = 0
+            chunks.extend(part.rstrip("\n") for part in _split_long_line(line, max_len))
+            continue
+        if current_len + line_len > max_len and current:
+            chunks.append("".join(current).rstrip("\n"))
+            current = [line]
+            current_len = line_len
+        else:
+            current.append(line)
+            current_len += line_len
+    if current:
+        chunks.append("".join(current).rstrip("\n"))
+    return [chunk for chunk in chunks if chunk]
+
+
+def _get_journal_lock() -> asyncio.Lock:
+    global _journal_lock
+    if _journal_lock is None:
+        _journal_lock = asyncio.Lock()
+    return _journal_lock
+
+
 async def _save_entry_with_sync(
     content: str, settings: Settings, git_service: GitService
 ) -> bool:
-    pulled = await asyncio.to_thread(git_service.pull_changes)
-    note_path = await append_entry(
-        settings.journal_dir, content, timezone=settings.timezone
-    )
-    pushed = await asyncio.to_thread(git_service.commit_and_push, note_path)
-    return pulled and pushed
+    async with _get_journal_lock():
+        pulled = await asyncio.to_thread(git_service.pull_changes)
+        note_path = await append_entry(
+            settings.journal_dir, content, timezone=settings.timezone
+        )
+        pushed = await asyncio.to_thread(git_service.commit_and_push, note_path)
+        return pulled and pushed
 
 
 @router.message(CommandStart())
@@ -86,11 +142,13 @@ async def handle_today(
 ) -> None:
     lang = _user_lang(message.from_user.id if message.from_user else None)
 
-    pulled = await asyncio.to_thread(git_service.pull_changes)
-    if not pulled:
-        logger.warning("Git pull failed before responding to /today")
-
-    content = await read_daily_note(settings.journal_dir, timezone=settings.timezone)
+    async with _get_journal_lock():
+        pulled = await asyncio.to_thread(git_service.pull_changes)
+        if not pulled:
+            logger.warning("Git pull failed before responding to /today")
+        content = await read_daily_note(
+            settings.journal_dir, timezone=settings.timezone
+        )
     if not content.strip():
         await _safe_respond(
             "today empty note", lambda: message.answer(messages.t("today_empty", lang))
@@ -99,7 +157,20 @@ async def handle_today(
 
     date_label = datetime.now(settings.timezone).strftime("%Y-%m-%d")
     reply_text = messages.format_today_note(date_label, content, lang)
-    await _safe_respond("today note", lambda: message.answer(reply_text))
+    if len(reply_text) <= MAX_TG_MESSAGE_LEN:
+        await _safe_respond("today note", lambda: message.answer(reply_text))
+        return
+
+    title = messages.t("today_header", lang).format(date=escape(date_label))
+    await _safe_respond("today note header", lambda: message.answer(title))
+    for index, chunk in enumerate(
+        _split_text_for_html(content.strip(), MAX_TG_MESSAGE_LEN), start=1
+    ):
+        escaped_chunk = escape(chunk)
+        await _safe_respond(
+            f"today note chunk {index}",
+            lambda chunk=escaped_chunk: message.answer(chunk),
+        )
 
 
 @router.callback_query(F.data.in_(LANG_CALLBACKS))
@@ -158,14 +229,30 @@ async def handle_text(
     await state.clear()
 
 
-@router.message(F.voice)
+@router.message(F.voice, StateFilter(None))
 async def handle_voice(message: Message, state: FSMContext, settings: Settings) -> None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as temp_file:
-        temp_path = Path(temp_file.name)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as temp_oga:
+        temp_oga_path = Path(temp_oga.name)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_wav:
+        temp_wav_path = Path(temp_wav.name)
 
     try:
-        await message.bot.download(message.voice, destination=temp_path)
-        transcription = await transcribe_audio(temp_path, settings)
+        await message.bot.download(message.voice, destination=temp_oga_path)
+        # Convert OGG Opus to WAV for API compatibility
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-y",
+            "-i", str(temp_oga_path),
+            "-ar", "16000",
+            "-ac", "1",
+            str(temp_wav_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, _ = await process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError("FFmpeg conversion failed")
+        transcription = await transcribe_audio(temp_wav_path, settings)
     except Exception:
         lang = _user_lang(message.from_user.id if message.from_user else None)
         await _safe_respond(
@@ -174,7 +261,8 @@ async def handle_voice(message: Message, state: FSMContext, settings: Settings) 
         )
         return
     finally:
-        temp_path.unlink(missing_ok=True)
+        temp_oga_path.unlink(missing_ok=True)
+        temp_wav_path.unlink(missing_ok=True)
 
     if not transcription:
         lang = _user_lang(message.from_user.id if message.from_user else None)
