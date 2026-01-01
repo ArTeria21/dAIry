@@ -7,9 +7,16 @@ from openai import AsyncOpenAI
 from dairy_bot.config import Settings
 
 PROMPT_TEXT = (
-    "Transcribe the audio in the primary spoken language without translating. "
-    "Keep any mixed-language words (brands, names, quoted phrases) exactly as spoken. "
-    "Return only the transcription text with natural punctuation."
+    "Role: You are an expert personal stenographer creating clean, readable notes for a diary.\n"
+    "Context: The speaker is a Russian native speaker living in Austria who works in Tech/ML.\n"
+    "Instructions:\n"
+    "1. Primary Language: Transcribe mainly in Russian.\n"
+    "2. Multilingual Handling: The audio contains mixed languages. \n"
+    "   - English: Technical terms (Machine Learning, Python, coding, Large Language Models (LLMs)).\
+    Write them in English (e.g., 'backend', 'deployment', 'llm', 'ChatGPT', 'Claude Code'), NEVER transliterate to Cyrillic.\n"
+    "   - German: Locations, street names, and daily life terms specific to Austria. Write them in correct German (e.g., 'Meldezettel', 'Hauptbahnhof'), even if pronounced with an accent.\n"
+    "3. Formatting: Output clean, grammatically correct text. Remove stuttering, filler words (e.g., 'э-э', 'ну'), and self-corrections. Structure the text into logical paragraphs.\n"
+    "4. Output: Return ONLY the text, no introductory phrases."
 )
 
 
