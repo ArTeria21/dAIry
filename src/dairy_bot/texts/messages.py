@@ -222,6 +222,27 @@ MESSAGES = {
         LANG_EN: "No data yet.",
         LANG_RU: "Данных пока нет.",
     },
+    # Location questions
+    "q_location_vienna": {
+        LANG_EN: "📍 Are you in Vienna today?",
+        LANG_RU: "📍 Ты сегодня в Вене?",
+    },
+    "q_location_city": {
+        LANG_EN: "🌍 What city are you in? (e.g., \"Berlin\" or \"Prague\")",
+        LANG_RU: "🌍 В каком городе ты находишься? (например, \"Берлин\" или \"Прага\")",
+    },
+    "location_not_found": {
+        LANG_EN: "⚠️ Couldn't find that city. Please try again or skip.",
+        LANG_RU: "⚠️ Не удалось найти этот город. Попробуй ещё раз или пропусти.",
+    },
+    "weather_fetched": {
+        LANG_EN: "🌤 Got weather for {city}: {temp}°C, UV {uv}",
+        LANG_RU: "🌤 Погода в {city}: {temp}°C, UV {uv}",
+    },
+    "weather_fetch_failed": {
+        LANG_EN: "⚠️ Couldn't fetch weather data. Continuing without it.",
+        LANG_RU: "⚠️ Не удалось получить данные о погоде. Продолжаем без них.",
+    },
 }
 
 

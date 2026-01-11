@@ -29,6 +29,12 @@ HEADERS = [
     # Physical activity
     "sport",
     "steps_8k",
+    # Weather
+    "weather_city",
+    "weather_temp_max",
+    "weather_pressure",
+    "weather_cloud_cover",
+    "weather_uv_index",
     # Habits & Routine
     "supplements",
     "tea_time",
@@ -154,6 +160,7 @@ class SheetsService:
 
             # Build row data (must match HEADERS order)
             habits = data.get("habits", {})
+            weather = data.get("weather", {})
             row_data = [
                 date_str,
                 # Mood & Mental state
@@ -174,6 +181,12 @@ class SheetsService:
                 # Physical activity
                 data.get("sport"),
                 habits.get("steps_8k"),
+                # Weather
+                weather.get("city"),
+                weather.get("temperature_max"),
+                weather.get("pressure"),
+                weather.get("cloud_cover"),
+                weather.get("uv_index"),
                 # Habits & Routine
                 habits.get("supplements"),
                 habits.get("tea_time"),

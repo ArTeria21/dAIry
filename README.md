@@ -51,6 +51,8 @@ In an era of closed platforms, **dAIry** focuses on data sovereignty.
 - 🏆 Habits checklist (steps, spending, learning, supplements, etc.)
 
 #### Morning Survey (10:00 or `/morning`)
+- 📍 Location check (Vienna or custom city)
+- 🌤 Weather data (auto-fetched via Open-Meteo API)
 - 😊 Mood for the day (1-5)
 - 😴 Sleep duration
 - 📊 Sleep score (0-100)
@@ -58,11 +60,24 @@ In an era of closed platforms, **dAIry** focuses on data sovereignty.
 - ⏰ Wake time
 - 📚 Reading before sleep (saved to previous day)
 
+#### 🌤 Weather Tracking
+
+The morning survey asks about your location. If you're in Vienna (default), weather is fetched automatically. Otherwise, you can enter any city name.
+
+Weather data saved:
+- **Temperature** (°C) — daily maximum
+- **Pressure** (hPa) — atmospheric pressure at sea level
+- **Cloud cover** (%) — sky coverage
+- **UV Index** — ultraviolet radiation level
+
+This allows you to correlate your mood, energy, and sleep with weather conditions over time.
+
 All survey data is stored in YAML frontmatter of daily notes, grouped thematically:
 - **Mood & Mental:** mood_morning, mood_evening, energy, anxiety, focus
 - **Sleep:** sleep_duration, sleep_score, bedtime, wake_time
 - **Food:** cravings, no_junk_food, no_eating_out
 - **Physical:** sport, steps_8k
+- **Weather:** city, temperature_max, pressure, cloud_cover, uv_index
 - **Habits:** supplements, tea_time, english_words, zero_spending, reading
 
 ### 📊 Google Sheets Integration (Optional)
@@ -86,6 +101,7 @@ Each row in the spreadsheet represents one day, with columns grouped thematicall
 - **Core:** Python 3.12+, `aiogram` 3.x (Async Telegram API)
 - **Data:** Local Filesystem (Markdown + YAML), `GitPython` for version control
 - **AI:** `openai` library (compatible with OpenRouter) for transcription
+- **Weather:** `httpx` for Open-Meteo API requests
 - **Scheduling:** `APScheduler` for survey triggers
 - **Config:** `pydantic-settings` for robust environment management
 - **Google Sheets:** `gspread` + `oauth2client` (optional)
@@ -108,7 +124,8 @@ src/
     │   ├── git_sync.py    # Git operations (pull/commit/push)
     │   ├── scheduler.py   # Survey triggers
     │   ├── sheets_service.py # Google Sheets sync (optional)
-    │   └── storage.py     # File system + YAML frontmatter
+    │   ├── storage.py     # File system + YAML frontmatter
+    │   └── weather_service.py # Open-Meteo weather API
     └── texts/             # Static text messages
 ```
 
@@ -168,6 +185,67 @@ src/
 | `/morning` | Start or view morning survey |
 | `/evening` | Start or view evening survey |
 
+### 🔧 Developer Guide: Adding New Fields
+
+When customizing surveys or adding new habits, follow these rules to avoid data loss.
+
+#### ⚠️ Critical: Google Sheets Column Order
+
+**Always add new columns to the END of the `HEADERS` list in `sheets_service.py`!**
+
+```python
+# ✅ CORRECT: Add new columns at the end
+HEADERS = [
+    "date",
+    # ... existing columns ...
+    "reading",
+    "new_habit",      # ← Add here
+    "new_metric",     # ← Add here
+]
+```
+
+**❌ NEVER insert columns in the middle** — this will shift all existing data and corrupt your spreadsheet!
+
+#### Adding a New Habit
+
+1. **`survey.py`** — Add to `HABITS` list:
+   ```python
+   HABITS = [
+       # ... existing ...
+       ("new_habit", "My new habit"),
+   ]
+   ```
+
+2. **`storage.py`** — Add to `DEFAULT_SURVEY_DATA["habits"]`:
+   ```python
+   "habits": {
+       # ... existing ...
+       "new_habit": None,
+   }
+   ```
+
+3. **`sheets_service.py`** — Add to END of `HEADERS` and `row_data`:
+   ```python
+   HEADERS = [..., "new_habit"]  # At the END!
+   row_data = [..., habits.get("new_habit")]  # Same order
+   ```
+
+#### Adding a New Survey Question
+
+1. Add `State` to `MorningSurveyStates` or `EveningSurveyStates`
+2. Add callback prefix constant
+3. Add handlers (answer + skip)
+4. Add field to `DEFAULT_SURVEY_DATA`
+5. Add column to END of `HEADERS`
+6. Add value to END of `row_data`
+7. Add message texts to `messages.py`
+
+#### Safe Operations
+
+- **YAML frontmatter**: Adding new fields is always safe (key-value format)
+- **Google Sheets**: Only safe if you add columns at the END
+- **Reordering columns**: Export to CSV, modify `HEADERS`, rearrange CSV manually, reimport
+
 ---
 
 <div id="russian"></div>
@@ -206,6 +284,8 @@ src/
 - 🏆 Чеклист привычек (шаги, траты, обучение, БАДы и др.)
 
 #### Утренний опрос (10:00 или `/morning`)
+- 📍 Проверка локации (Вена или другой город)
+- 🌤 Данные о погоде (автоматически через Open-Meteo API)
 - 😊 Настрой на день (1-5)
 - 😴 Продолжительность сна
 - 📊 Sleep Score (0-100)
@@ -213,11 +293,24 @@ src/
 - ⏰ Время подъёма
 - 📚 Чтение перед сном (сохраняется в предыдущий день)
 
+#### 🌤 Отслеживание погоды
+
+Утренний опрос спрашивает о вашем местоположении. Если вы в Вене (по умолчанию), погода загружается автоматически. Иначе можно ввести любой город.
+
+Сохраняемые данные о погоде:
+- **Температура** (°C) — дневной максимум
+- **Давление** (hPa) — атмосферное давление на уровне моря
+- **Облачность** (%) — покрытие неба облаками
+- **UV индекс** — уровень ультрафиолетового излучения
+
+Это позволяет анализировать корреляции между вашим настроением, энергией, сном и погодными условиями.
+
 Все данные опросов сохраняются в YAML-заголовке ежедневных заметок, сгруппированные тематически:
 - **Настроение:** mood_morning, mood_evening, energy, anxiety, focus
 - **Сон:** sleep_duration, sleep_score, bedtime, wake_time
 - **Питание:** cravings, no_junk_food, no_eating_out
 - **Физическая активность:** sport, steps_8k
+- **Погода:** city, temperature_max, pressure, cloud_cover, uv_index
 - **Привычки:** supplements, tea_time, english_words, zero_spending, reading
 
 ### 📊 Интеграция с Google Sheets (Опционально)
@@ -241,6 +334,7 @@ src/
 - **Ядро:** Python 3.12+, `aiogram` 3.x (Асинхронный Telegram API)
 - **Данные:** Локальная файловая система (Markdown + YAML), `GitPython` для контроля версий
 - **AI:** библиотека `openai` (совместима с OpenRouter) для транскрибации
+- **Погода:** `httpx` для запросов к Open-Meteo API
 - **Планировщик:** `APScheduler` для триггеров опросов
 - **Конфигурация:** `pydantic-settings`
 - **Google Sheets:** `gspread` + `oauth2client` (опционально)
@@ -263,7 +357,8 @@ src/
     │   ├── git_sync.py    # Работа с Git (pull/commit/push)
     │   ├── scheduler.py   # Триггеры опросов
     │   ├── sheets_service.py # Синхронизация с Google Sheets (опц.)
-    │   └── storage.py     # Работа с файлами + YAML frontmatter
+    │   ├── storage.py     # Работа с файлами + YAML frontmatter
+    │   └── weather_service.py # Open-Meteo API для погоды
     └── texts/             # Текстовые константы
 ```
 
@@ -322,3 +417,64 @@ src/
 | `/today` | Показать записи за сегодня |
 | `/morning` | Начать или посмотреть утренний опрос |
 | `/evening` | Начать или посмотреть вечерний опрос |
+
+### 🔧 Руководство разработчика: Добавление новых полей
+
+При кастомизации опросов или добавлении новых привычек следуйте этим правилам, чтобы не потерять данные.
+
+#### ⚠️ Критично: Порядок колонок в Google Sheets
+
+**Всегда добавляйте новые колонки В КОНЕЦ списка `HEADERS` в `sheets_service.py`!**
+
+```python
+# ✅ ПРАВИЛЬНО: Новые колонки в конце
+HEADERS = [
+    "date",
+    # ... существующие колонки ...
+    "reading",
+    "new_habit",      # ← Добавлять сюда
+    "new_metric",     # ← Добавлять сюда
+]
+```
+
+**❌ НИКОГДА не вставляйте колонки в середину** — это сдвинет все данные и испортит таблицу!
+
+#### Добавление новой привычки
+
+1. **`survey.py`** — Добавьте в список `HABITS`:
+   ```python
+   HABITS = [
+       # ... существующие ...
+       ("new_habit", "Моя новая привычка"),
+   ]
+   ```
+
+2. **`storage.py`** — Добавьте в `DEFAULT_SURVEY_DATA["habits"]`:
+   ```python
+   "habits": {
+       # ... существующие ...
+       "new_habit": None,
+   }
+   ```
+
+3. **`sheets_service.py`** — Добавьте в КОНЕЦ `HEADERS` и `row_data`:
+   ```python
+   HEADERS = [..., "new_habit"]  # В КОНЕЦ!
+   row_data = [..., habits.get("new_habit")]  # Тот же порядок
+   ```
+
+#### Добавление нового вопроса опроса
+
+1. Добавьте `State` в `MorningSurveyStates` или `EveningSurveyStates`
+2. Добавьте константу callback prefix
+3. Добавьте обработчики (answer + skip)
+4. Добавьте поле в `DEFAULT_SURVEY_DATA`
+5. Добавьте колонку в КОНЕЦ `HEADERS`
+6. Добавьте значение в КОНЕЦ `row_data`
+7. Добавьте текстовые сообщения в `messages.py`
+
+#### Безопасные операции
+
+- **YAML frontmatter**: Добавление новых полей всегда безопасно (формат key-value)
+- **Google Sheets**: Безопасно только если добавлять колонки В КОНЕЦ
+- **Переупорядочивание колонок**: Экспортируйте в CSV, измените `HEADERS`, переставьте колонки в CSV вручную, импортируйте обратно

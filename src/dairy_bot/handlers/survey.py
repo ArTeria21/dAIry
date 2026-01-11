@@ -22,6 +22,10 @@ from dairy_bot.services.storage import (
     is_morning_survey_filled,
     save_survey_data,
 )
+from dairy_bot.services.weather_service import (
+    get_city_weather,
+    get_vienna_weather,
+)
 from dairy_bot.texts import messages
 
 router = Router()
@@ -51,6 +55,8 @@ class EveningSurveyStates(StatesGroup):
 
 
 class MorningSurveyStates(StatesGroup):
+    location = State()
+    location_city = State()
     mood = State()
     sleep_duration = State()
     sleep_score = State()
@@ -79,6 +85,7 @@ HABITS_DONE = "habits_done"
 # Morning survey callbacks
 MOOD_MORNING_PREFIX = "mood_m_"
 READING_PREFIX = "reading_"
+LOCATION_VIENNA_PREFIX = "loc_vienna_"
 
 
 def _get_survey_lock() -> asyncio.Lock:
@@ -172,6 +179,16 @@ def build_refill_keyboard(callback_data: str, lang: str) -> InlineKeyboardBuilde
     """Build keyboard with 'Refill' button for already filled survey."""
     kb = InlineKeyboardBuilder()
     kb.button(text=messages.t("btn_refill_survey", lang), callback_data=callback_data)
+    return kb
+
+
+def build_vienna_keyboard(lang: str) -> InlineKeyboardBuilder:
+    """Build inline keyboard for Vienna location question."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text=messages.t("btn_yes", lang), callback_data=f"{LOCATION_VIENNA_PREFIX}yes")
+    kb.button(text=messages.t("btn_no", lang), callback_data=f"{LOCATION_VIENNA_PREFIX}no")
+    kb.button(text=messages.t("btn_skip", lang), callback_data=SKIP_CALLBACK)
+    kb.adjust(2, 1)
     return kb
 
 
@@ -284,6 +301,23 @@ def format_survey_results(data: dict[str, Any], survey_type: str, lang: str) -> 
     elif survey_type == "morning":
         lines.append(f"<b>{messages.t('morning_results_title', lang)}</b>")
         lines.append("")
+
+        # Weather info
+        weather = data.get("weather", {})
+        if weather.get("city"):
+            lines.append(f"📍 {weather['city']}")
+            weather_parts = []
+            if weather.get("temperature_max") is not None:
+                weather_parts.append(f"{weather['temperature_max']}°C")
+            if weather.get("pressure") is not None:
+                weather_parts.append(f"{round(weather['pressure'])} hPa")
+            if weather.get("cloud_cover") is not None:
+                weather_parts.append(f"☁️ {weather['cloud_cover']}%")
+            if weather.get("uv_index") is not None:
+                weather_parts.append(f"UV {weather['uv_index']}")
+            if weather_parts:
+                lines.append(f"🌤 {' · '.join(weather_parts)}")
+            lines.append("")
 
         if data.get("mood_morning") is not None:
             bar = _format_bar(data["mood_morning"], 5)
@@ -720,7 +754,7 @@ async def send_morning_invite(bot, user_id: int, settings: Settings) -> None:
 
 @router.callback_query(F.data.in_({MORNING_START, MORNING_REFILL}))
 async def start_morning_survey(callback: CallbackQuery, state: FSMContext) -> None:
-    """Start morning survey."""
+    """Start morning survey with location question."""
     await state.clear()
     await state.update_data(survey_data={}, yesterday_data={})
     lang = _user_lang(callback.from_user.id)
@@ -729,10 +763,128 @@ async def start_morning_survey(callback: CallbackQuery, state: FSMContext) -> No
     if callback.message:
         await _safe_respond("morning start delete", callback.message.delete)
 
+    # Ask about location first
+    kb = build_vienna_keyboard(lang)
+    await _safe_respond(
+        "location vienna question",
+        lambda: callback.message.answer(
+            messages.t("q_location_vienna", lang),
+            reply_markup=kb.as_markup()
+        )
+    )
+    await state.set_state(MorningSurveyStates.location)
+
+
+async def _proceed_to_mood_question(callback: CallbackQuery, state: FSMContext) -> None:
+    """Helper to proceed to mood question after location handling."""
+    lang = _user_lang(callback.from_user.id)
     kb = build_rating_keyboard(MOOD_MORNING_PREFIX, 1, 5, lang)
     await _safe_respond(
         "morning mood question",
         lambda: callback.message.answer(
+            messages.t("q_mood_morning", lang),
+            reply_markup=kb.as_markup()
+        )
+    )
+    await state.set_state(MorningSurveyStates.mood)
+
+
+@router.callback_query(F.data.startswith(LOCATION_VIENNA_PREFIX), StateFilter(MorningSurveyStates.location))
+async def morning_location_vienna_answer(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle Vienna location answer."""
+    is_vienna = callback.data.replace(LOCATION_VIENNA_PREFIX, "") == "yes"
+    lang = _user_lang(callback.from_user.id)
+
+    await _safe_respond("location ack", callback.answer)
+    if callback.message:
+        await _safe_respond("location delete", callback.message.delete)
+
+    if is_vienna:
+        # Fetch Vienna weather
+        weather = await get_vienna_weather()
+        if weather:
+            data = await state.get_data()
+            survey_data = data.get("survey_data", {})
+            survey_data["weather"] = weather.to_dict()
+            await state.update_data(survey_data=survey_data)
+
+            # Notify user about weather
+            await _safe_respond(
+                "weather info",
+                lambda: callback.message.answer(
+                    messages.t("weather_fetched", lang).format(
+                        city=weather.city,
+                        temp=round(weather.temperature_max, 1),
+                        uv=round(weather.uv_index, 1)
+                    )
+                )
+            )
+        else:
+            await _safe_respond(
+                "weather failed",
+                lambda: callback.message.answer(messages.t("weather_fetch_failed", lang))
+            )
+
+        await _proceed_to_mood_question(callback, state)
+    else:
+        # Ask for city name
+        await _safe_respond(
+            "location city question",
+            lambda: callback.message.answer(messages.t("q_location_city", lang))
+        )
+        await state.set_state(MorningSurveyStates.location_city)
+
+
+@router.callback_query(F.data == SKIP_CALLBACK, StateFilter(MorningSurveyStates.location))
+async def morning_location_skip(callback: CallbackQuery, state: FSMContext) -> None:
+    """Skip location question."""
+    await _safe_respond("skip ack", callback.answer)
+    if callback.message:
+        await _safe_respond("skip delete", callback.message.delete)
+
+    await _proceed_to_mood_question(callback, state)
+
+
+@router.message(F.text, StateFilter(MorningSurveyStates.location_city))
+async def morning_location_city_answer(message: Message, state: FSMContext) -> None:
+    """Handle city name input with validation."""
+    lang = _user_lang(message.from_user.id if message.from_user else None)
+    city_name = message.text.strip()
+
+    # Try to fetch weather for the city (this validates the city exists)
+    weather = await get_city_weather(city_name)
+
+    if weather is None:
+        # City not found - ask to retry
+        await _safe_respond(
+            "city not found",
+            lambda: message.answer(messages.t("location_not_found", lang))
+        )
+        return  # Stay in location_city state, wait for valid input
+
+    # City found - save weather data
+    data = await state.get_data()
+    survey_data = data.get("survey_data", {})
+    survey_data["weather"] = weather.to_dict()
+    await state.update_data(survey_data=survey_data)
+
+    # Notify user about weather
+    await _safe_respond(
+        "weather info",
+        lambda: message.answer(
+            messages.t("weather_fetched", lang).format(
+                city=weather.city,
+                temp=round(weather.temperature_max, 1),
+                uv=round(weather.uv_index, 1)
+            )
+        )
+    )
+
+    # Proceed to mood question
+    kb = build_rating_keyboard(MOOD_MORNING_PREFIX, 1, 5, lang)
+    await _safe_respond(
+        "morning mood question",
+        lambda: message.answer(
             messages.t("q_mood_morning", lang),
             reply_markup=kb.as_markup()
         )

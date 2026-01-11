@@ -27,6 +27,14 @@ DEFAULT_SURVEY_DATA: dict[str, Any] = {
     "cravings": None,
     # Physical activity
     "sport": None,
+    # Weather data
+    "weather": {
+        "city": None,
+        "temperature_max": None,
+        "pressure": None,
+        "cloud_cover": None,
+        "uv_index": None,
+    },
     # Habits (grouped thematically)
     "habits": {
         # Food
