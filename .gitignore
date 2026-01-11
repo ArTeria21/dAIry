@@ -12,6 +12,7 @@ AGENTS.md
 
 # Environment variables
 .env
+gcp_creds.json
 
 # Test journal
 journal/

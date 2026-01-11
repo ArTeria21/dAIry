@@ -64,8 +64,8 @@ MESSAGES = {
         LANG_RU: "Язык переключён на русский. Готов принимать заметки!",
     },
     "btn_save": {
-        LANG_EN: "✅ Save",
-        LANG_RU: "✅ Сохранить",
+        LANG_EN: "💾 Save",
+        LANG_RU: "💾 Сохранить",
     },
     "btn_edit": {
         LANG_EN: "✏️ Edit",
@@ -94,6 +94,133 @@ MESSAGES = {
     "today_header": {
         LANG_EN: "📓 Today's note ({date})",
         LANG_RU: "📓 Заметки за сегодня ({date})",
+    },
+    # Survey buttons
+    "btn_skip": {
+        LANG_EN: "⏭️ Skip",
+        LANG_RU: "⏭️ Пропустить",
+    },
+    "btn_yes": {
+        LANG_EN: "✅ Yes",
+        LANG_RU: "✅ Да",
+    },
+    "btn_no": {
+        LANG_EN: "❌ No",
+        LANG_RU: "❌ Нет",
+    },
+    "btn_done": {
+        LANG_EN: "🏁 Done",
+        LANG_RU: "🏁 Готово",
+    },
+    "btn_start_survey": {
+        LANG_EN: "📝 Start",
+        LANG_RU: "📝 Начать",
+    },
+    "btn_refill_survey": {
+        LANG_EN: "🔄 Fill again",
+        LANG_RU: "🔄 Заполнить заново",
+    },
+    # Survey invitations
+    "evening_invite": {
+        LANG_EN: "🌙 Good evening! Time for a quick check-in. How was your day?",
+        LANG_RU: "🌙 Добрый вечер! Время для небольшого опроса. Как прошёл твой день?",
+    },
+    "morning_invite": {
+        LANG_EN: "☀️ Good morning! Let's start the day with a quick check-in.",
+        LANG_RU: "☀️ Доброе утро! Начнём день с небольшого опроса.",
+    },
+    # Evening survey questions
+    "q_mood_evening": {
+        LANG_EN: "😊 Rate your mood this evening (1-5, higher is better)",
+        LANG_RU: "😊 Оцени своё настроение сегодня вечером (1-5, больше — лучше)",
+    },
+    "q_energy": {
+        LANG_EN: "⚡ Rate your energy level today (1-5, higher is better)",
+        LANG_RU: "⚡ Оцени уровень энергии сегодня (1-5, больше — лучше)",
+    },
+    "q_anxiety": {
+        LANG_EN: "😰 Rate your anxiety level today (1-5, lower is better)",
+        LANG_RU: "😰 Оцени уровень тревожности сегодня (1-5, меньше — лучше)",
+    },
+    "q_focus": {
+        LANG_EN: "🎯 Rate your focus/productivity today:\n0 — couldn't concentrate\n1 — worked in bursts\n2 — productive day\n3 — God Mode (flow)",
+        LANG_RU: "🎯 Оцени свою продуктивность/концентрацию:\n0 — не мог собраться\n1 — работал рывками\n2 — продуктивный день\n3 — God Mode (поток)",
+    },
+    "q_cravings": {
+        LANG_EN: "🍬 How strong were your cravings for sweets/junk food? (1-5, lower is better)",
+        LANG_RU: "🍬 Насколько сильно хотелось сладкого/джанк-фуда? (1-5, меньше — лучше)",
+    },
+    "q_sport": {
+        LANG_EN: "🏃 Did you exercise today?",
+        LANG_RU: "🏃 Был ли сегодня спорт?",
+    },
+    "q_habits": {
+        LANG_EN: "🏆 Your achievements today (tap to toggle):",
+        LANG_RU: "🏆 Твои ачивки за сегодня (нажми, чтобы отметить):",
+    },
+    # Morning survey questions
+    "q_mood_morning": {
+        LANG_EN: "😊 What's your mood for today? (1-5, higher is better)",
+        LANG_RU: "😊 Какой настрой на сегодняшний день? (1-5, больше — лучше)",
+    },
+    "q_sleep_duration": {
+        LANG_EN: "😴 How long did you sleep? (e.g., \"8h 30m\" or \"8 30\")",
+        LANG_RU: "😴 Сколько ты спал сегодня? (например, \"8 часов 30 минут\" или \"8 30\")",
+    },
+    "q_sleep_score": {
+        LANG_EN: "📊 What's your Sleep Score today? (0-100 from your sleep tracker)",
+        LANG_RU: "📊 Какой у тебя Sleep Score сегодня? (0-100 из трекера сна)",
+    },
+    "q_bedtime": {
+        LANG_EN: "🛏️ What time did you go to bed yesterday? (e.g., \"23:45\")",
+        LANG_RU: "🛏️ Во сколько времени ты вчера лёг спать? (например, \"23:45\")",
+    },
+    "q_wake_time": {
+        LANG_EN: "⏰ What time did you get out of bed today? (e.g., \"10:05\")",
+        LANG_RU: "⏰ Во сколько времени ты сегодня встал из кровати? (например, \"10:05\")",
+    },
+    "q_reading": {
+        LANG_EN: "📚 Did you read a book before sleep yesterday?",
+        LANG_RU: "📚 Читал ли ты вчера перед сном книгу?",
+    },
+    # Validation errors
+    "invalid_sleep_duration": {
+        LANG_EN: "⚠️ I couldn't understand the format. Try \"8h 30m\" or \"8 30\".",
+        LANG_RU: "⚠️ Не понял формат. Попробуй \"8 часов 30 минут\" или \"8 30\".",
+    },
+    "invalid_sleep_score": {
+        LANG_EN: "⚠️ Please enter a number between 0 and 100.",
+        LANG_RU: "⚠️ Введи число от 0 до 100.",
+    },
+    "invalid_time": {
+        LANG_EN: "⚠️ I couldn't understand the time. Try \"23:45\" format.",
+        LANG_RU: "⚠️ Не понял время. Попробуй формат \"23:45\".",
+    },
+    # Survey completion
+    "survey_saved_synced": {
+        LANG_EN: "✅ Survey saved and synced!",
+        LANG_RU: "✅ Опрос сохранён и синхронизирован!",
+    },
+    "survey_saved_local": {
+        LANG_EN: "✅ Survey saved locally, but sync failed.",
+        LANG_RU: "✅ Опрос сохранён локально, но синхронизация не удалась.",
+    },
+    # Results display
+    "evening_results_title": {
+        LANG_EN: "🌙 Evening Survey Results",
+        LANG_RU: "🌙 Результаты вечернего опроса",
+    },
+    "morning_results_title": {
+        LANG_EN: "☀️ Morning Survey Results",
+        LANG_RU: "☀️ Результаты утреннего опроса",
+    },
+    "habits_completed": {
+        LANG_EN: "Habits completed",
+        LANG_RU: "Выполненные привычки",
+    },
+    "no_data": {
+        LANG_EN: "No data yet.",
+        LANG_RU: "Данных пока нет.",
     },
 }
 

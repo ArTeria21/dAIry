@@ -6,6 +6,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from dairy_bot.config import Settings
 from dairy_bot.handlers.journal import router as journal_router
+from dairy_bot.handlers.survey import router as survey_router
 from dairy_bot.middlewares.auth import AuthMiddleware
 from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.scheduler import setup_scheduler
@@ -32,6 +33,7 @@ async def main() -> None:
     auth_middleware = AuthMiddleware(settings.allowed_user_id)
     dispatcher.message.middleware(auth_middleware)
     dispatcher.callback_query.middleware(auth_middleware)
+    dispatcher.include_router(survey_router)
     dispatcher.include_router(journal_router)
 
     scheduler = setup_scheduler(bot=bot, settings=settings)
