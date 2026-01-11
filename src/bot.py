@@ -10,6 +10,7 @@ from dairy_bot.handlers.survey import router as survey_router
 from dairy_bot.middlewares.auth import AuthMiddleware
 from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.scheduler import setup_scheduler
+from dairy_bot.services.sheets_service import SheetsService
 
 
 async def main() -> None:
@@ -22,6 +23,12 @@ async def main() -> None:
     git_service = GitService(
         settings.journal_dir, enabled=settings.git_enabled, timezone=settings.timezone
     )
+    sheets_service = SheetsService(
+        enabled=settings.google_sheets_enabled,
+        spreadsheet_id=settings.google_sheets_id,
+        creds_file=settings.google_creds_file,
+        timezone=settings.timezone,
+    )
     bot = Bot(
         token=settings.bot_token.get_secret_value(),
         default=DefaultBotProperties(parse_mode="HTML"),
@@ -29,6 +36,7 @@ async def main() -> None:
     dispatcher = Dispatcher()
     dispatcher["settings"] = settings
     dispatcher["git_service"] = git_service
+    dispatcher["sheets_service"] = sheets_service
 
     auth_middleware = AuthMiddleware(settings.allowed_user_id)
     dispatcher.message.middleware(auth_middleware)

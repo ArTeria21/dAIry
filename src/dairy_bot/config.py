@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     openrouter_base_url: str = Field(
         default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
     )
+    # Google Sheets integration
+    google_sheets_enabled: bool = Field(default=False, alias="GOOGLE_SHEETS_ENABLED")
+    google_sheets_id: str | None = Field(default=None, alias="GOOGLE_SHEETS_ID")
+    google_creds_file: Path | None = Field(default=None, alias="GOOGLE_CREDS_FILE")
 
     @field_validator("timezone", mode="before")
     @classmethod

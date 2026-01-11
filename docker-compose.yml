@@ -6,8 +6,10 @@ services:
       - .env
     environment:
       JOURNAL_DIR: /data
+      GOOGLE_CREDS_FILE: /app/gcp_creds.json
     volumes:
       - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/data
       - ${HOME}/.ssh:/root/.ssh:ro
+      - ./gcp_creds.json:/app/gcp_creds.json:ro
     init: true
     restart: unless-stopped

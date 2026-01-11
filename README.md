@@ -37,6 +37,7 @@ In an era of closed platforms, **dAIry** focuses on data sovereignty.
 - **🔄 Auto-Git Sync:** Automatically pulls changes before writing and pushes updates after saving.
 - **🔒 Privacy Focused:** Single-user architecture. The bot only talks to _you_.
 - **📂 Obsidian Compatible:** Files are organized by date (`YYYY-MM-DD.md`) with YAML frontmatter for metadata.
+- **📊 Google Sheets Export:** Optionally sync survey data to Google Sheets for easy visualization and analysis.
 
 ### 📋 Survey System
 
@@ -57,7 +58,28 @@ In an era of closed platforms, **dAIry** focuses on data sovereignty.
 - ⏰ Wake time
 - 📚 Reading before sleep (saved to previous day)
 
-All survey data is stored in YAML frontmatter of daily notes for easy analysis.
+All survey data is stored in YAML frontmatter of daily notes, grouped thematically:
+- **Mood & Mental:** mood_morning, mood_evening, energy, anxiety, focus
+- **Sleep:** sleep_duration, sleep_score, bedtime, wake_time
+- **Food:** cravings, no_junk_food, no_eating_out
+- **Physical:** sport, steps_8k
+- **Habits:** supplements, tea_time, english_words, zero_spending, reading
+
+### 📊 Google Sheets Integration (Optional)
+
+You can enable automatic export of survey data to Google Sheets:
+
+1. Create a Google Cloud project and enable Sheets API
+2. Create a service account and download JSON credentials
+3. Create a new Google Sheet and share it with the service account email
+4. Add to `.env`:
+   ```bash
+   GOOGLE_SHEETS_ENABLED=true
+   GOOGLE_SHEETS_ID=your_spreadsheet_id
+   GOOGLE_CREDS_FILE=gcp_creds.json
+   ```
+
+Each row in the spreadsheet represents one day, with columns grouped thematically matching the YAML structure.
 
 ### 🛠 Tech Stack
 
@@ -66,6 +88,7 @@ All survey data is stored in YAML frontmatter of daily notes for easy analysis.
 - **AI:** `openai` library (compatible with OpenRouter) for transcription
 - **Scheduling:** `APScheduler` for survey triggers
 - **Config:** `pydantic-settings` for robust environment management
+- **Google Sheets:** `gspread` + `oauth2client` (optional)
 - **Package Management:** `uv` (modern Python package installer)
 
 ### 📂 Project Structure
@@ -84,6 +107,7 @@ src/
     │   ├── ai_service.py  # Voice transcription wrapper
     │   ├── git_sync.py    # Git operations (pull/commit/push)
     │   ├── scheduler.py   # Survey triggers
+    │   ├── sheets_service.py # Google Sheets sync (optional)
     │   └── storage.py     # File system + YAML frontmatter
     └── texts/             # Static text messages
 ```
@@ -168,6 +192,7 @@ src/
 - **🔄 Авто-Git Sync:** Бот делает `git pull` перед записью и `git push` после.
 - **🔒 Приватность:** Бот работает только для одного пользователя (вас).
 - **📂 Совместимость с Obsidian:** Файлы сохраняются по датам (`YYYY-MM-DD.md`) с YAML-заголовком для метаданных.
+- **📊 Экспорт в Google Sheets:** Опционально синхронизировать данные опросов в Google Таблицы для удобной визуализации и анализа.
 
 ### 📋 Система опросов
 
@@ -188,7 +213,28 @@ src/
 - ⏰ Время подъёма
 - 📚 Чтение перед сном (сохраняется в предыдущий день)
 
-Все данные опросов сохраняются в YAML-заголовке ежедневных заметок для удобного анализа.
+Все данные опросов сохраняются в YAML-заголовке ежедневных заметок, сгруппированные тематически:
+- **Настроение:** mood_morning, mood_evening, energy, anxiety, focus
+- **Сон:** sleep_duration, sleep_score, bedtime, wake_time
+- **Питание:** cravings, no_junk_food, no_eating_out
+- **Физическая активность:** sport, steps_8k
+- **Привычки:** supplements, tea_time, english_words, zero_spending, reading
+
+### 📊 Интеграция с Google Sheets (Опционально)
+
+Можно включить автоматический экспорт данных опросов в Google Таблицы:
+
+1. Создайте проект в Google Cloud и включите Sheets API
+2. Создайте сервисный аккаунт и скачайте JSON с ключами
+3. Создайте новую Google Таблицу и поделитесь ей с email сервисного аккаунта
+4. Добавьте в `.env`:
+   ```bash
+   GOOGLE_SHEETS_ENABLED=true
+   GOOGLE_SHEETS_ID=id_вашей_таблицы
+   GOOGLE_CREDS_FILE=gcp_creds.json
+   ```
+
+Каждая строка в таблице соответствует одному дню, колонки сгруппированы тематически (как и в YAML).
 
 ### 🛠 Технологии
 
@@ -197,6 +243,7 @@ src/
 - **AI:** библиотека `openai` (совместима с OpenRouter) для транскрибации
 - **Планировщик:** `APScheduler` для триггеров опросов
 - **Конфигурация:** `pydantic-settings`
+- **Google Sheets:** `gspread` + `oauth2client` (опционально)
 - **Менеджер пакетов:** `uv`
 
 ### 📂 Структура Проекта
@@ -215,6 +262,7 @@ src/
     │   ├── ai_service.py  # Обертка для транскрибации
     │   ├── git_sync.py    # Работа с Git (pull/commit/push)
     │   ├── scheduler.py   # Триггеры опросов
+    │   ├── sheets_service.py # Синхронизация с Google Sheets (опц.)
     │   └── storage.py     # Работа с файлами + YAML frontmatter
     └── texts/             # Текстовые константы
 ```

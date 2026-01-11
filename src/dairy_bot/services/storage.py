@@ -12,29 +12,35 @@ from dairy_bot.config import DEFAULT_TZ
 
 # Default structure for survey data in YAML frontmatter
 DEFAULT_SURVEY_DATA: dict[str, Any] = {
-    # Evening survey
+    # Mood & Mental state
+    "mood_morning": None,
     "mood_evening": None,
     "energy": None,
     "anxiety": None,
     "focus": None,
-    "cravings": None,
-    "sport": None,
-    "habits": {
-        "steps_8k": None,
-        "zero_spending": None,
-        "english_words": None,
-        "supplements": None,
-        "tea_time": None,
-        "no_junk_food": None,
-        "no_eating_out": None,
-        "reading": None,
-    },
-    # Morning survey
-    "mood_morning": None,
+    # Sleep
     "sleep_duration": None,
     "sleep_score": None,
     "bedtime": None,
     "wake_time": None,
+    # Food & Cravings
+    "cravings": None,
+    # Physical activity
+    "sport": None,
+    # Habits (grouped thematically)
+    "habits": {
+        # Food
+        "no_junk_food": None,
+        "no_eating_out": None,
+        # Physical
+        "steps_8k": None,
+        # Routine
+        "supplements": None,
+        "tea_time": None,
+        "english_words": None,
+        "zero_spending": None,
+        "reading": None,
+    },
 }
 
 DATE_HEADER_RE = re.compile(r"^#\s+\d{4}-\d{2}-\d{2}\s*$")

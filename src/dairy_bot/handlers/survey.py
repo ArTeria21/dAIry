@@ -15,6 +15,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dairy_bot.config import Settings
 from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.language_store import get_language
+from dairy_bot.services.sheets_service import SheetsService
 from dairy_bot.services.storage import (
     get_survey_data,
     is_evening_survey_filled,
@@ -102,16 +103,29 @@ async def _safe_respond(action: str, op) -> None:
 
 
 async def _save_with_sync(
-    journal_dir, updates: dict[str, Any], settings: Settings, git_service: GitService,
+    journal_dir,
+    updates: dict[str, Any],
+    settings: Settings,
+    git_service: GitService,
+    sheets_service: SheetsService | None = None,
     moment: datetime | None = None,
 ) -> bool:
-    """Save survey data with git sync."""
+    """Save survey data with git sync and optional Google Sheets sync."""
     async with _get_survey_lock():
         pulled = await asyncio.to_thread(git_service.pull_changes)
         note_path = await save_survey_data(
             journal_dir, updates, moment=moment, timezone=settings.timezone
         )
         pushed = await asyncio.to_thread(git_service.commit_and_push, note_path)
+
+        # Sync to Google Sheets if enabled
+        if sheets_service and sheets_service.enabled:
+            # Get full survey data for the day to sync complete row
+            full_data = await get_survey_data(
+                journal_dir, moment=moment, timezone=settings.timezone
+            )
+            await asyncio.to_thread(sheets_service.sync_survey_data, full_data, moment)
+
         return pulled and pushed
 
 
@@ -603,7 +617,8 @@ async def evening_habit_toggle(callback: CallbackQuery, state: FSMContext) -> No
 
 @router.callback_query(F.data == HABITS_DONE, StateFilter(EveningSurveyStates.habits))
 async def evening_habits_done(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, git_service: GitService
+    callback: CallbackQuery, state: FSMContext, settings: Settings,
+    git_service: GitService, sheets_service: SheetsService,
 ) -> None:
     """Finish evening survey with habits."""
     data = await state.get_data()
@@ -620,7 +635,9 @@ async def evening_habits_done(
         await _safe_respond("habits done delete", callback.message.delete)
 
     # Save to storage
-    synced = await _save_with_sync(settings.journal_dir, survey_data, settings, git_service)
+    synced = await _save_with_sync(
+        settings.journal_dir, survey_data, settings, git_service, sheets_service
+    )
     status_key = "survey_saved_synced" if synced else "survey_saved_local"
 
     await _safe_respond(
@@ -632,7 +649,8 @@ async def evening_habits_done(
 
 @router.callback_query(F.data == SKIP_CALLBACK, StateFilter(EveningSurveyStates.habits))
 async def evening_habits_skip(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, git_service: GitService
+    callback: CallbackQuery, state: FSMContext, settings: Settings,
+    git_service: GitService, sheets_service: SheetsService,
 ) -> None:
     """Skip habits and finish evening survey."""
     data = await state.get_data()
@@ -644,7 +662,9 @@ async def evening_habits_skip(
         await _safe_respond("skip delete", callback.message.delete)
 
     # Save to storage
-    synced = await _save_with_sync(settings.journal_dir, survey_data, settings, git_service)
+    synced = await _save_with_sync(
+        settings.journal_dir, survey_data, settings, git_service, sheets_service
+    )
     status_key = "survey_saved_synced" if synced else "survey_saved_local"
 
     await _safe_respond(
@@ -862,7 +882,8 @@ async def morning_wake_time_answer(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith(READING_PREFIX), StateFilter(MorningSurveyStates.reading))
 async def morning_reading_answer(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, git_service: GitService
+    callback: CallbackQuery, state: FSMContext, settings: Settings,
+    git_service: GitService, sheets_service: SheetsService,
 ) -> None:
     """Handle reading boolean (goes to yesterday's note) and finish survey."""
     value = callback.data.replace(READING_PREFIX, "") == "yes"
@@ -882,11 +903,13 @@ async def morning_reading_answer(
     yesterday = now - timedelta(days=1)
 
     # Save today's data
-    synced_today = await _save_with_sync(settings.journal_dir, survey_data, settings, git_service)
+    synced_today = await _save_with_sync(
+        settings.journal_dir, survey_data, settings, git_service, sheets_service
+    )
 
     # Save yesterday's data (bedtime + reading)
     synced_yesterday = await _save_with_sync(
-        settings.journal_dir, yesterday_data, settings, git_service, moment=yesterday
+        settings.journal_dir, yesterday_data, settings, git_service, sheets_service, moment=yesterday
     )
 
     synced = synced_today and synced_yesterday
@@ -901,7 +924,8 @@ async def morning_reading_answer(
 
 @router.callback_query(F.data == SKIP_CALLBACK, StateFilter(MorningSurveyStates.reading))
 async def morning_reading_skip(
-    callback: CallbackQuery, state: FSMContext, settings: Settings, git_service: GitService
+    callback: CallbackQuery, state: FSMContext, settings: Settings,
+    git_service: GitService, sheets_service: SheetsService,
 ) -> None:
     """Skip reading and finish morning survey."""
     data = await state.get_data()
@@ -918,13 +942,15 @@ async def morning_reading_skip(
     yesterday = now - timedelta(days=1)
 
     # Save today's data
-    synced_today = await _save_with_sync(settings.journal_dir, survey_data, settings, git_service)
+    synced_today = await _save_with_sync(
+        settings.journal_dir, survey_data, settings, git_service, sheets_service
+    )
 
     # Save yesterday's data if any
     synced_yesterday = True
     if yesterday_data:
         synced_yesterday = await _save_with_sync(
-            settings.journal_dir, yesterday_data, settings, git_service, moment=yesterday
+            settings.journal_dir, yesterday_data, settings, git_service, sheets_service, moment=yesterday
         )
 
     synced = synced_today and synced_yesterday
