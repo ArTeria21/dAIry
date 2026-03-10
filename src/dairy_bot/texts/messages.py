@@ -75,6 +75,14 @@ MESSAGES = {
         LANG_EN: "❌ Cancel",
         LANG_RU: "❌ Отмена",
     },
+    "btn_deep_answer": {
+        LANG_EN: "✍️ Answer",
+        LANG_RU: "✍️ Ответить",
+    },
+    "btn_deep_other": {
+        LANG_EN: "🔄 Another question",
+        LANG_RU: "🔄 Другой вопрос",
+    },
     "voice_preview_title": {
         LANG_EN: "Voice note preview",
         LANG_RU: "Предпросмотр голосовой заметки",
@@ -94,6 +102,34 @@ MESSAGES = {
     "today_header": {
         LANG_EN: "📓 Today's note ({date})",
         LANG_RU: "📓 Заметки за сегодня ({date})",
+    },
+    "deep_question_daily_title": {
+        LANG_EN: "🧠 Question of the day",
+        LANG_RU: "🧠 Вопрос дня",
+    },
+    "deep_question_manual_title": {
+        LANG_EN: "🧠 Deep reflection question",
+        LANG_RU: "🧠 Глубокий вопрос для рефлексии",
+    },
+    "deep_question_answer_prompt": {
+        LANG_EN: "Send your answer now as text or voice, and I'll save it to today's note.",
+        LANG_RU: "Отправь ответ текстом или голосом, и я сохраню его в заметку за сегодня.",
+    },
+    "deep_question_answer_saved": {
+        LANG_EN: "✅ Deep answer saved.",
+        LANG_RU: "✅ Ответ на глубокий вопрос сохранён.",
+    },
+    "deep_question_answer_missing": {
+        LANG_EN: "⚠️ I lost question context. Generate a new question first.",
+        LANG_RU: "⚠️ Не удалось определить вопрос. Сначала сгенерируй новый.",
+    },
+    "deep_question_generation_failed": {
+        LANG_EN: "⚠️ Couldn't generate a deep question now. Please try again.",
+        LANG_RU: "⚠️ Не удалось сгенерировать глубокий вопрос. Попробуй ещё раз.",
+    },
+    "deep_question_generating": {
+        LANG_EN: "⌛ Generating a deep question...",
+        LANG_RU: "⌛ Генерирую глубокий вопрос...",
     },
     # Survey buttons
     "btn_skip": {
@@ -143,8 +179,8 @@ MESSAGES = {
         LANG_RU: "😰 Оцени уровень тревожности сегодня (1-5, меньше — лучше)",
     },
     "q_focus": {
-        LANG_EN: "🎯 Rate your focus/productivity today:\n0 — couldn't concentrate\n1 — worked in bursts\n2 — productive day\n3 — God Mode (flow)",
-        LANG_RU: "🎯 Оцени свою продуктивность/концентрацию:\n0 — не мог собраться\n1 — работал рывками\n2 — продуктивный день\n3 — God Mode (поток)",
+        LANG_EN: "🎯 Rate your focus/engagement today:\n0 — couldn't concentrate\n1 — focused in bursts\n2 — good focus / engaged\n3 — God Mode (flow state)",
+        LANG_RU: "🎯 Оцени свой фокус/включенность сегодня:\n0 — не мог собраться\n1 — фокус урывками\n2 — хорошая вовлечённость\n3 — God Mode (поток)",
     },
     "q_cravings": {
         LANG_EN: "🍬 How strong were your cravings for sweets/junk food? (1-5, lower is better)",

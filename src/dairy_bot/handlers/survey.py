@@ -17,6 +17,7 @@ from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.language_store import get_language
 from dairy_bot.services.sheets_service import SheetsService
 from dairy_bot.services.storage import (
+    count_deep_answers_for_day,
     get_survey_data,
     is_evening_survey_filled,
     is_morning_survey_filled,
@@ -36,7 +37,7 @@ _survey_lock: asyncio.Lock | None = None
 HABITS = [
     ("steps_8k", "8000+ шагов"),
     ("zero_spending", "0 евро трат"),
-    ("english_words", "Английские слова"),
+    ("english_words", "Занятия английским"),
     ("supplements", "БАДы"),
     ("tea_time", "Чаепитие"),
     ("no_junk_food", "Без сладкого/фаст-фуда"),
@@ -131,7 +132,15 @@ async def _save_with_sync(
             full_data = await get_survey_data(
                 journal_dir, moment=moment, timezone=settings.timezone
             )
-            await asyncio.to_thread(sheets_service.sync_survey_data, full_data, moment)
+            deep_answers_count = await count_deep_answers_for_day(
+                journal_dir, moment=moment, timezone=settings.timezone
+            )
+            await asyncio.to_thread(
+                sheets_service.sync_survey_data,
+                full_data,
+                moment,
+                deep_answers_count,
+            )
 
         return pulled and pushed
 

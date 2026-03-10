@@ -20,6 +20,16 @@ class Settings(BaseSettings):
         alias="VOICE_MODEL_NAME",
         validation_alias=AliasChoices("VOICE_MODEL_NAME"),
     )
+    question_model_name: str = Field(
+        default="openai/gpt-4.1-mini",
+        alias="QUESTION_MODEL_NAME",
+        validation_alias=AliasChoices("QUESTION_MODEL_NAME"),
+    )
+    question_language: str = Field(
+        default="ru",
+        alias="QUESTION_LANGUAGE",
+        validation_alias=AliasChoices("QUESTION_LANGUAGE"),
+    )
     journal_dir: Path = Field(
         ...,
         alias="JOURNAL_DIR",
@@ -34,6 +44,8 @@ class Settings(BaseSettings):
     openrouter_base_url: str = Field(
         default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
     )
+    deep_question_start_hour: int = Field(default=11, alias="DEEP_QUESTION_START_HOUR")
+    deep_question_end_hour: int = Field(default=20, alias="DEEP_QUESTION_END_HOUR")
     # Google Sheets integration
     google_sheets_enabled: bool = Field(default=False, alias="GOOGLE_SHEETS_ENABLED")
     google_sheets_id: str | None = Field(default=None, alias="GOOGLE_SHEETS_ID")
@@ -59,5 +71,12 @@ class Settings(BaseSettings):
                 DEFAULT_TZ_NAME,
             )
         return DEFAULT_TZ
+
+    @field_validator("deep_question_start_hour", "deep_question_end_hour")
+    @classmethod
+    def _validate_hour(cls, value: int) -> int:
+        if value < 0 or value > 23:
+            raise ValueError("Hour must be between 0 and 23")
+        return value
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="ignore")

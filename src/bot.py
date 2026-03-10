@@ -5,11 +5,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 
 from dairy_bot.config import Settings
+from dairy_bot.handlers.deep_question import router as deep_question_router
 from dairy_bot.handlers.journal import router as journal_router
 from dairy_bot.handlers.survey import router as survey_router
 from dairy_bot.middlewares.auth import AuthMiddleware
 from dairy_bot.services.git_sync import GitService
-from dairy_bot.services.scheduler import setup_scheduler
+from dairy_bot.services.scheduler import recover_daily_deep_question, setup_scheduler
 from dairy_bot.services.sheets_service import SheetsService
 
 
@@ -42,11 +43,15 @@ async def main() -> None:
     dispatcher.message.middleware(auth_middleware)
     dispatcher.callback_query.middleware(auth_middleware)
     dispatcher.include_router(survey_router)
+    dispatcher.include_router(deep_question_router)
     dispatcher.include_router(journal_router)
 
-    scheduler = setup_scheduler(bot=bot, settings=settings)
+    scheduler = setup_scheduler(bot=bot, settings=settings, git_service=git_service)
     await bot.delete_webhook(drop_pending_updates=True)
     scheduler.start()
+    await recover_daily_deep_question(
+        scheduler=scheduler, bot=bot, settings=settings, git_service=git_service
+    )
 
     try:
         await dispatcher.start_polling(

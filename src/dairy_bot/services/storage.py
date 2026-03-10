@@ -1,4 +1,5 @@
 import asyncio
+import random
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -52,6 +53,11 @@ DEFAULT_SURVEY_DATA: dict[str, Any] = {
 }
 
 DATE_HEADER_RE = re.compile(r"^#\s+\d{4}-\d{2}-\d{2}\s*$")
+SECTION_HEADER_RE = re.compile(r"^##\s+\d{2}:\d{2}\s*$")
+QUESTION_ID_RE = re.compile(r"^Question ID:\s*(.+?)\s*$")
+SOURCE_RE = re.compile(r"^Source:\s*(.+?)\s*$")
+DEEP_QUESTION_MARKER = "**Deep Question**"
+DEEP_ANSWER_MARKER = "**Deep Answer**"
 
 
 def _now(moment: datetime | None = None, timezone: ZoneInfo | None = None) -> datetime:
@@ -324,6 +330,217 @@ async def append_entry(
         await file.write(payload)
 
     return note_path
+
+
+def _parse_deep_blocks(text: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return (questions, answers) parsed from note body markdown blocks."""
+    lines = _strip_frontmatter(text.splitlines())
+    questions: list[dict[str, str]] = []
+    answers: list[dict[str, str]] = []
+
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        marker = ""
+        if line == DEEP_QUESTION_MARKER:
+            marker = "question"
+        elif line == DEEP_ANSWER_MARKER:
+            marker = "answer"
+        if not marker:
+            index += 1
+            continue
+
+        question_id = ""
+        source = ""
+        cursor = index + 1
+        while cursor < len(lines):
+            meta_line = lines[cursor].strip()
+            if not meta_line:
+                cursor += 1
+                break
+            qid_match = QUESTION_ID_RE.match(meta_line)
+            if qid_match:
+                question_id = qid_match.group(1).strip()
+                cursor += 1
+                continue
+            source_match = SOURCE_RE.match(meta_line)
+            if source_match:
+                source = source_match.group(1).strip()
+                cursor += 1
+                continue
+            break
+
+        content_lines: list[str] = []
+        while cursor < len(lines):
+            current = lines[cursor]
+            if SECTION_HEADER_RE.match(current.strip()):
+                break
+            content_lines.append(current)
+            cursor += 1
+
+        payload = {
+            "question_id": question_id,
+            "source": source,
+            "text": "\n".join(content_lines).strip(),
+        }
+        if marker == "question":
+            questions.append(payload)
+        else:
+            answers.append(payload)
+        index = cursor
+
+    return questions, answers
+
+
+def _remove_deep_blocks(text: str) -> str:
+    """Remove deep question/answer blocks to detect normal journal content."""
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return text
+
+    result: list[str] = []
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped not in {DEEP_QUESTION_MARKER, DEEP_ANSWER_MARKER}:
+            result.append(lines[index])
+            index += 1
+            continue
+
+        # Drop marker + metadata lines.
+        index += 1
+        while index < len(lines) and lines[index].strip():
+            index += 1
+        # Skip one optional separator line.
+        if index < len(lines) and not lines[index].strip():
+            index += 1
+        # Drop content until next timestamp section.
+        while index < len(lines):
+            if SECTION_HEADER_RE.match(lines[index].strip()):
+                break
+            index += 1
+    return "".join(result)
+
+
+async def append_deep_question(
+    journal_dir: Path,
+    question: str,
+    question_id: str,
+    source: str,
+    moment: datetime | None = None,
+    timezone: ZoneInfo | None = None,
+) -> Path:
+    current = _now(moment, timezone)
+    note_path = daily_note_path(journal_dir, current, timezone)
+    await _ensure_daily_template(journal_dir, note_path, current)
+    await _update_neighbor_nav(journal_dir, current)
+
+    payload = (
+        f"## {current:%H:%M}\n\n"
+        f"{DEEP_QUESTION_MARKER}\n"
+        f"Question ID: {question_id}\n"
+        f"Source: {source}\n\n"
+        f"{question.strip()}\n\n"
+    )
+    async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
+        await file.write(payload)
+    return note_path
+
+
+async def append_deep_answer(
+    journal_dir: Path,
+    answer: str,
+    question_id: str,
+    moment: datetime | None = None,
+    timezone: ZoneInfo | None = None,
+) -> Path:
+    current = _now(moment, timezone)
+    note_path = daily_note_path(journal_dir, current, timezone)
+    await _ensure_daily_template(journal_dir, note_path, current)
+    await _update_neighbor_nav(journal_dir, current)
+
+    payload = (
+        f"## {current:%H:%M}\n\n"
+        f"{DEEP_ANSWER_MARKER}\n"
+        f"Question ID: {question_id}\n\n"
+        f"{answer.strip()}\n\n"
+    )
+    async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
+        await file.write(payload)
+    return note_path
+
+
+async def list_recent_deep_questions(journal_dir: Path, limit: int = 15) -> list[str]:
+    note_paths = sorted(
+        [path for path in journal_dir.rglob("*.md") if path.is_file()],
+        reverse=True,
+    )
+    questions: list[str] = []
+    for note_path in note_paths:
+        try:
+            async with aiofiles.open(note_path, "r", encoding="utf-8") as file:
+                content = await file.read()
+        except FileNotFoundError:
+            continue
+        parsed_questions, _ = _parse_deep_blocks(content)
+        for item in reversed(parsed_questions):
+            if item["text"]:
+                questions.append(item["text"])
+            if len(questions) >= limit:
+                return questions[:limit]
+    return questions[:limit]
+
+
+async def pick_random_substantive_note(
+    journal_dir: Path,
+    timezone: ZoneInfo | None = None,
+) -> str | None:
+    tz = timezone or DEFAULT_TZ
+    today_path = daily_note_path(journal_dir, timezone=tz)
+    candidates: list[Path] = []
+    for note_path in journal_dir.rglob("*.md"):
+        if not note_path.is_file() or note_path == today_path:
+            continue
+        candidates.append(note_path)
+    random.shuffle(candidates)
+
+    for note_path in candidates:
+        try:
+            async with aiofiles.open(note_path, "r", encoding="utf-8") as file:
+                content = await file.read()
+        except FileNotFoundError:
+            continue
+        cleaned = _remove_deep_blocks(content)
+        if _has_real_content(cleaned):
+            return cleaned.strip()
+    return None
+
+
+async def count_deep_answers_for_day(
+    journal_dir: Path,
+    moment: datetime | None = None,
+    timezone: ZoneInfo | None = None,
+) -> int:
+    content = await read_daily_note(journal_dir, moment=moment, timezone=timezone)
+    if not content:
+        return 0
+    _, answers = _parse_deep_blocks(content)
+    return sum(1 for answer in answers if answer.get("text"))
+
+
+async def day_has_daily_question_sent(
+    journal_dir: Path,
+    moment: datetime | None = None,
+    timezone: ZoneInfo | None = None,
+) -> bool:
+    content = await read_daily_note(journal_dir, moment=moment, timezone=timezone)
+    if not content:
+        return False
+    questions, _ = _parse_deep_blocks(content)
+    for question in questions:
+        if question.get("source") == "daily":
+            return True
+    return False
 
 
 async def note_has_content(

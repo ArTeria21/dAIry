@@ -41,6 +41,7 @@ HEADERS = [
     "english_words",
     "zero_spending",
     "reading",
+    "deep_answers_count",
 ]
 
 
@@ -140,6 +141,7 @@ class SheetsService:
         self,
         data: dict[str, Any],
         moment: datetime | None = None,
+        deep_answers_count: int | None = None,
     ) -> bool:
         """Sync survey data to Google Sheets.
 
@@ -193,6 +195,7 @@ class SheetsService:
                 habits.get("english_words"),
                 habits.get("zero_spending"),
                 habits.get("reading"),
+                deep_answers_count if deep_answers_count is not None else "",
             ]
 
             # Convert None to empty string and booleans to strings for sheets
