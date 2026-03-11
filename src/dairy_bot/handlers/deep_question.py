@@ -1,9 +1,7 @@
 import asyncio
 import logging
 import tempfile
-from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramNetworkError
@@ -59,35 +57,29 @@ def _user_lang(user_id: int | None) -> str:
     return get_language(user_id or 0)
 
 
-def _new_question_id(now: datetime) -> str:
-    return f"dq_{now:%Y%m%d}_{uuid4().hex[:6]}"
-
-
-def _parse_question_callback(data: str | None, prefix: str) -> tuple[str, str] | None:
+def _parse_question_callback(data: str | None, prefix: str) -> str | None:
     if not data:
         return None
-    parts = data.split(":", maxsplit=2)
-    if len(parts) != 3:
+    parts = data.split(":")
+    if len(parts) < 2:
         return None
-    action, source, question_id = parts
+    action, source = parts[0], parts[1]
     if action != prefix:
         return None
     if source not in {SOURCE_DAILY, SOURCE_MANUAL}:
         return None
-    if not question_id:
-        return None
-    return source, question_id
+    return source
 
 
-def _build_question_keyboard(question_id: str, source: str, lang: str) -> InlineKeyboardBuilder:
+def _build_question_keyboard(source: str, lang: str) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(
         text=messages.t("btn_deep_answer", lang),
-        callback_data=f"{ANSWER_PREFIX}:{source}:{question_id}",
+        callback_data=f"{ANSWER_PREFIX}:{source}",
     )
     kb.button(
         text=messages.t("btn_deep_other", lang),
-        callback_data=f"{OTHER_PREFIX}:{source}:{question_id}",
+        callback_data=f"{OTHER_PREFIX}:{source}",
     )
     kb.adjust(2)
     return kb
@@ -110,6 +102,15 @@ def _format_question(question: str, source: str, lang: str) -> str:
     return f"{title}\n\n{question.strip()}"
 
 
+def _extract_question_text(message_text: str | None) -> str:
+    if not message_text:
+        return ""
+    parts = message_text.split("\n\n", maxsplit=1)
+    if len(parts) == 2:
+        return parts[1].strip()
+    return message_text.strip()
+
+
 async def _safe_respond(action: str, op) -> None:
     try:
         await op()
@@ -123,10 +124,7 @@ async def _generate_and_store_question(
     settings: Settings,
     git_service: GitService,
     source: str,
-    now: datetime | None = None,
-) -> tuple[str, str]:
-    timestamp = now or datetime.now(settings.timezone)
-    question_id = _new_question_id(timestamp)
+) -> str:
     async with _get_deep_lock():
         await asyncio.to_thread(git_service.pull_changes)
         recent_questions = await list_recent_deep_questions(settings.journal_dir, limit=15)
@@ -141,17 +139,16 @@ async def _generate_and_store_question(
         note_path = await append_deep_question(
             journal_dir=settings.journal_dir,
             question=question,
-            question_id=question_id,
             source=source,
             timezone=settings.timezone,
         )
         await asyncio.to_thread(git_service.commit_and_push, note_path)
-    return question_id, question
+    return question
 
 
 async def _save_answer(
     answer: str,
-    question_id: str,
+    question_text: str,
     settings: Settings,
     git_service: GitService,
     sheets_service: SheetsService | None = None,
@@ -161,7 +158,7 @@ async def _save_answer(
         note_path = await append_deep_answer(
             journal_dir=settings.journal_dir,
             answer=answer,
-            question_id=question_id,
+            question_text=question_text,
             timezone=settings.timezone,
         )
         await asyncio.to_thread(git_service.commit_and_push, note_path)
@@ -196,7 +193,7 @@ async def cmd_deep_question(
         progress_message = None
 
     try:
-        question_id, question = await _generate_and_store_question(
+        question = await _generate_and_store_question(
             settings=settings,
             git_service=git_service,
             source=SOURCE_MANUAL,
@@ -217,7 +214,7 @@ async def cmd_deep_question(
         return
 
     text = _format_question(question, SOURCE_MANUAL, lang)
-    kb = _build_question_keyboard(question_id, SOURCE_MANUAL, lang)
+    kb = _build_question_keyboard(SOURCE_MANUAL, lang)
     if progress_message:
         await _safe_respond(
             "deep question generated edit",
@@ -241,7 +238,7 @@ async def regenerate_question(
     if not parsed:
         await _safe_respond("invalid deep regenerate callback", callback.answer)
         return
-    source, _ = parsed
+    source = parsed
     # Acknowledge callback immediately to avoid Telegram timeout while LLM/Git work runs.
     await _safe_respond("deep regenerate callback answer", callback.answer)
     await state.clear()
@@ -255,7 +252,7 @@ async def regenerate_question(
         progress_set = True
 
     try:
-        question_id, question = await _generate_and_store_question(
+        question = await _generate_and_store_question(
             settings=settings,
             git_service=git_service,
             source=source,
@@ -278,7 +275,7 @@ async def regenerate_question(
                 )
         return
 
-    kb = _build_question_keyboard(question_id, source, lang)
+    kb = _build_question_keyboard(source, lang)
     new_text = _format_question(question, source, lang)
     if callback.message:
         await _safe_respond(
@@ -293,11 +290,20 @@ async def answer_question(callback: CallbackQuery, state: FSMContext) -> None:
     if not parsed:
         await _safe_respond("invalid deep answer callback", callback.answer)
         return
-    _, question_id = parsed
+    source = parsed
     await _safe_respond("deep answer callback answer", callback.answer)
     lang = _user_lang(callback.from_user.id if callback.from_user else None)
+    question_text = _extract_question_text(callback.message.text if callback.message else "")
+    if not question_text:
+        await _safe_respond(
+            "deep answer missing text",
+            lambda: callback.message.answer(messages.t("deep_question_answer_missing", lang))
+            if callback.message
+            else callback.answer(),
+        )
+        return
     await state.set_state(DeepQuestionStates.waiting_answer)
-    await state.update_data(question_id=question_id)
+    await state.update_data(question_text=question_text, source=source)
     if callback.message:
         await _safe_respond(
             "deep answer prompt",
@@ -314,9 +320,9 @@ async def save_text_answer(
     sheets_service: SheetsService | None = None,
 ) -> None:
     data = await state.get_data()
-    question_id = str(data.get("question_id", "")).strip()
+    question_text = str(data.get("question_text", "")).strip()
     lang = _user_lang(message.from_user.id if message.from_user else None)
-    if not question_id:
+    if not question_text:
         await state.clear()
         await _safe_respond(
             "deep answer missing id",
@@ -325,7 +331,7 @@ async def save_text_answer(
         return
     await _save_answer(
         message.text or "",
-        question_id,
+        question_text,
         settings,
         git_service,
         sheets_service=sheets_service,
@@ -344,9 +350,9 @@ async def save_voice_answer(
     settings: Settings,
 ) -> None:
     data = await state.get_data()
-    question_id = str(data.get("question_id", "")).strip()
+    question_text = str(data.get("question_text", "")).strip()
     lang = _user_lang(message.from_user.id if message.from_user else None)
-    if not question_id:
+    if not question_text:
         await state.clear()
         await _safe_respond(
             "deep voice answer missing id",
@@ -396,7 +402,7 @@ async def save_voice_answer(
         return
 
     await state.set_state(DeepQuestionStates.waiting_voice_decision)
-    await state.update_data(transcription=transcription, question_id=question_id)
+    await state.update_data(transcription=transcription, question_text=question_text)
     kb = _build_voice_keyboard(lang)
     preview = messages.format_transcription_preview(transcription, lang)
     await _safe_respond(
@@ -417,9 +423,9 @@ async def confirm_voice_answer(
 ) -> None:
     data = await state.get_data()
     transcription = str(data.get("transcription", "")).strip()
-    question_id = str(data.get("question_id", "")).strip()
+    question_text = str(data.get("question_text", "")).strip()
     lang = _user_lang(callback.from_user.id if callback.from_user else None)
-    if not transcription or not question_id:
+    if not transcription or not question_text:
         await state.clear()
         await _safe_respond(
             "deep voice nothing to save",
@@ -428,7 +434,7 @@ async def confirm_voice_answer(
         return
     await _save_answer(
         transcription,
-        question_id,
+        question_text,
         settings,
         git_service,
         sheets_service=sheets_service,
@@ -476,9 +482,9 @@ async def save_edited_voice_answer(
     sheets_service: SheetsService | None = None,
 ) -> None:
     data = await state.get_data()
-    question_id = str(data.get("question_id", "")).strip()
+    question_text = str(data.get("question_text", "")).strip()
     lang = _user_lang(message.from_user.id if message.from_user else None)
-    if not question_id:
+    if not question_text:
         await state.clear()
         await _safe_respond(
             "deep edited voice missing id",
@@ -487,7 +493,7 @@ async def save_edited_voice_answer(
         return
     await _save_answer(
         message.text or "",
-        question_id,
+        question_text,
         settings,
         git_service,
         sheets_service=sheets_service,
@@ -521,7 +527,7 @@ async def send_daily_deep_question(
     """Generate and deliver daily deep question with inline actions."""
     lang = _user_lang(user_id)
     try:
-        question_id, question = await _generate_and_store_question(
+        question = await _generate_and_store_question(
             settings=settings,
             git_service=git_service,
             source=SOURCE_DAILY,
@@ -530,7 +536,7 @@ async def send_daily_deep_question(
         logger.exception("Failed to generate daily deep question")
         return False
 
-    kb = _build_question_keyboard(question_id, SOURCE_DAILY, lang)
+    kb = _build_question_keyboard(SOURCE_DAILY, lang)
     await _safe_respond(
         "daily deep question send",
         lambda: bot.send_message(

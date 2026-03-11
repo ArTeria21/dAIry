@@ -58,6 +58,7 @@ QUESTION_ID_RE = re.compile(r"^Question ID:\s*(.+?)\s*$")
 SOURCE_RE = re.compile(r"^Source:\s*(.+?)\s*$")
 DEEP_QUESTION_MARKER = "**Deep Question**"
 DEEP_ANSWER_MARKER = "**Deep Answer**"
+DAILY_DEEP_QUESTION_KEY = "deep_question_daily_sent"
 
 
 def _now(moment: datetime | None = None, timezone: ZoneInfo | None = None) -> datetime:
@@ -187,6 +188,10 @@ def _build_nav_line(prev_label: str | None, next_label: str | None) -> str:
     if next_label:
         links.append(f"[[{next_label}|Next day]]")
     return " · ".join(links)
+
+
+def _normalize_block_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip())
 
 
 async def _write_template(note_path: Path, date_label: str, nav_line: str) -> None:
@@ -333,7 +338,7 @@ async def append_entry(
 
 
 def _parse_deep_blocks(text: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Return (questions, answers) parsed from note body markdown blocks."""
+    """Return parsed question blocks and answer payloads, supporting old and new formats."""
     lines = _strip_frontmatter(text.splitlines())
     questions: list[dict[str, str]] = []
     answers: list[dict[str, str]] = []
@@ -341,26 +346,35 @@ def _parse_deep_blocks(text: str) -> tuple[list[dict[str, str]], list[dict[str, 
     index = 0
     while index < len(lines):
         line = lines[index].strip()
-        marker = ""
-        if line == DEEP_QUESTION_MARKER:
-            marker = "question"
-        elif line == DEEP_ANSWER_MARKER:
-            marker = "answer"
-        if not marker:
+        if line != DEEP_QUESTION_MARKER:
+            if line == DEEP_ANSWER_MARKER:
+                cursor = index + 1
+                while cursor < len(lines):
+                    meta_line = lines[cursor].strip()
+                    if QUESTION_ID_RE.match(meta_line):
+                        cursor += 1
+                        continue
+                    if not meta_line:
+                        cursor += 1
+                        break
+                    break
+                answer_lines: list[str] = []
+                while cursor < len(lines) and not SECTION_HEADER_RE.match(lines[cursor].strip()):
+                    answer_lines.append(lines[cursor])
+                    cursor += 1
+                answer_text = "\n".join(answer_lines).strip()
+                if answer_text:
+                    answers.append({"text": answer_text})
+                index = cursor
+                continue
             index += 1
             continue
 
-        question_id = ""
-        source = ""
         cursor = index + 1
+        source = ""
         while cursor < len(lines):
             meta_line = lines[cursor].strip()
-            if not meta_line:
-                cursor += 1
-                break
-            qid_match = QUESTION_ID_RE.match(meta_line)
-            if qid_match:
-                question_id = qid_match.group(1).strip()
+            if QUESTION_ID_RE.match(meta_line):
                 cursor += 1
                 continue
             source_match = SOURCE_RE.match(meta_line)
@@ -368,25 +382,40 @@ def _parse_deep_blocks(text: str) -> tuple[list[dict[str, str]], list[dict[str, 
                 source = source_match.group(1).strip()
                 cursor += 1
                 continue
+            if not meta_line:
+                cursor += 1
+                break
             break
 
-        content_lines: list[str] = []
+        question_lines: list[str] = []
+        answer_lines: list[str] = []
+        in_answer = False
         while cursor < len(lines):
             current = lines[cursor]
-            if SECTION_HEADER_RE.match(current.strip()):
+            stripped = current.strip()
+            if SECTION_HEADER_RE.match(stripped):
                 break
-            content_lines.append(current)
+            if stripped == DEEP_ANSWER_MARKER:
+                in_answer = True
+                cursor += 1
+                while cursor < len(lines) and QUESTION_ID_RE.match(lines[cursor].strip()):
+                    cursor += 1
+                if cursor < len(lines) and not lines[cursor].strip():
+                    cursor += 1
+                continue
+            if in_answer:
+                answer_lines.append(current)
+            else:
+                question_lines.append(current)
             cursor += 1
 
-        payload = {
-            "question_id": question_id,
-            "source": source,
-            "text": "\n".join(content_lines).strip(),
-        }
-        if marker == "question":
+        question_text = "\n".join(question_lines).strip()
+        answer_text = "\n".join(answer_lines).strip()
+        payload = {"source": source, "text": question_text, "answer": answer_text}
+        if question_text:
             questions.append(payload)
-        else:
-            answers.append(payload)
+        if answer_text:
+            answers.append({"text": answer_text})
         index = cursor
 
     return questions, answers
@@ -422,10 +451,60 @@ def _remove_deep_blocks(text: str) -> str:
     return "".join(result)
 
 
+def _find_question_block_range(
+    lines: list[str], question_text: str
+) -> tuple[int, int, bool] | None:
+    target = _normalize_block_text(question_text)
+    match_with_answer: tuple[int, int, bool] | None = None
+
+    index = 0
+    while index < len(lines):
+        if lines[index].strip() != DEEP_QUESTION_MARKER:
+            index += 1
+            continue
+
+        cursor = index + 1
+        while cursor < len(lines):
+            meta_line = lines[cursor].strip()
+            if QUESTION_ID_RE.match(meta_line) or SOURCE_RE.match(meta_line):
+                cursor += 1
+                continue
+            if not meta_line:
+                cursor += 1
+                break
+            break
+
+        question_lines: list[str] = []
+        has_answer = False
+        while cursor < len(lines):
+            stripped = lines[cursor].strip()
+            if SECTION_HEADER_RE.match(stripped):
+                break
+            if stripped == DEEP_ANSWER_MARKER:
+                has_answer = True
+                break
+            question_lines.append(lines[cursor])
+            cursor += 1
+
+        end_idx = cursor
+        while end_idx < len(lines) and not SECTION_HEADER_RE.match(lines[end_idx].strip()):
+            end_idx += 1
+
+        parsed_question = _normalize_block_text("".join(question_lines))
+        if parsed_question == target:
+            candidate = (index, end_idx, has_answer)
+            if not has_answer:
+                match_with_answer = candidate
+            elif match_with_answer is None:
+                match_with_answer = candidate
+        index = end_idx if end_idx > index else index + 1
+
+    return match_with_answer
+
+
 async def append_deep_question(
     journal_dir: Path,
     question: str,
-    question_id: str,
     source: str,
     moment: datetime | None = None,
     timezone: ZoneInfo | None = None,
@@ -438,19 +517,29 @@ async def append_deep_question(
     payload = (
         f"## {current:%H:%M}\n\n"
         f"{DEEP_QUESTION_MARKER}\n"
-        f"Question ID: {question_id}\n"
-        f"Source: {source}\n\n"
+        "\n"
         f"{question.strip()}\n\n"
     )
     async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
         await file.write(payload)
+    if source == "daily":
+        try:
+            async with aiofiles.open(note_path, "r", encoding="utf-8") as file:
+                content = await file.read()
+        except FileNotFoundError:
+            content = ""
+        existing_data, rest_content = _parse_frontmatter(content)
+        existing_data[DAILY_DEEP_QUESTION_KEY] = True
+        new_content = _build_frontmatter(existing_data) + rest_content
+        async with aiofiles.open(note_path, "w", encoding="utf-8") as file:
+            await file.write(new_content)
     return note_path
 
 
 async def append_deep_answer(
     journal_dir: Path,
     answer: str,
-    question_id: str,
+    question_text: str,
     moment: datetime | None = None,
     timezone: ZoneInfo | None = None,
 ) -> Path:
@@ -459,14 +548,40 @@ async def append_deep_answer(
     await _ensure_daily_template(journal_dir, note_path, current)
     await _update_neighbor_nav(journal_dir, current)
 
-    payload = (
-        f"## {current:%H:%M}\n\n"
-        f"{DEEP_ANSWER_MARKER}\n"
-        f"Question ID: {question_id}\n\n"
-        f"{answer.strip()}\n\n"
-    )
-    async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
-        await file.write(payload)
+    try:
+        async with aiofiles.open(note_path, "r", encoding="utf-8") as file:
+            content = await file.read()
+    except FileNotFoundError:
+        content = ""
+
+    frontmatter_data, rest_content = _parse_frontmatter(content)
+    lines = rest_content.splitlines(keepends=True)
+    block_range = _find_question_block_range(lines, question_text)
+    normalized_answer = answer.strip()
+
+    if block_range is None:
+        payload = (
+            f"## {current:%H:%M}\n\n"
+            f"{DEEP_QUESTION_MARKER}\n\n"
+            f"{question_text.strip()}\n\n"
+            f"{DEEP_ANSWER_MARKER}\n\n"
+            f"{normalized_answer}\n\n"
+        )
+        async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
+            await file.write(payload)
+        return note_path
+
+    _, end_idx, has_answer = block_range
+    insertion_lines: list[str]
+    if has_answer:
+        insertion_lines = [f"\n{normalized_answer}\n\n"]
+    else:
+        insertion_lines = [f"\n{DEEP_ANSWER_MARKER}\n\n{normalized_answer}\n\n"]
+    lines[end_idx:end_idx] = insertion_lines
+    new_frontmatter = _build_frontmatter(frontmatter_data) if frontmatter_data else ""
+    new_content = new_frontmatter + "".join(lines)
+    async with aiofiles.open(note_path, "w", encoding="utf-8") as file:
+        await file.write(new_content)
     return note_path
 
 
@@ -524,8 +639,10 @@ async def count_deep_answers_for_day(
     content = await read_daily_note(journal_dir, moment=moment, timezone=timezone)
     if not content:
         return 0
-    _, answers = _parse_deep_blocks(content)
-    return sum(1 for answer in answers if answer.get("text"))
+    questions, answers = _parse_deep_blocks(content)
+    nested_count = sum(1 for question in questions if question.get("answer"))
+    legacy_count = sum(1 for answer in answers if answer.get("text"))
+    return max(nested_count, legacy_count)
 
 
 async def day_has_daily_question_sent(
@@ -536,11 +653,11 @@ async def day_has_daily_question_sent(
     content = await read_daily_note(journal_dir, moment=moment, timezone=timezone)
     if not content:
         return False
+    data, _ = _parse_frontmatter(content)
+    if data.get(DAILY_DEEP_QUESTION_KEY) is True:
+        return True
     questions, _ = _parse_deep_blocks(content)
-    for question in questions:
-        if question.get("source") == "daily":
-            return True
-    return False
+    return any(question.get("source") == "daily" for question in questions)
 
 
 async def note_has_content(
@@ -571,6 +688,40 @@ async def read_daily_note(
             return await file.read()
     except FileNotFoundError:
         return ""
+
+
+def _strip_note_template(text: str) -> str:
+    """Remove frontmatter, date header, and nav line from a daily note."""
+    lines = _strip_frontmatter(text.splitlines())
+    if not lines:
+        return ""
+
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+
+    if index < len(lines) and _looks_like_date_header(lines[index]):
+        index += 1
+
+    if index < len(lines) and _looks_like_nav_line(lines[index]):
+        index += 1
+
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+
+    return "\n".join(lines[index:]).strip()
+
+
+async def read_daily_note_entries(
+    journal_dir: Path,
+    moment: datetime | None = None,
+    timezone: ZoneInfo | None = None,
+) -> str:
+    """Return only the journal body entries without frontmatter/template header."""
+    content = await read_daily_note(journal_dir, moment=moment, timezone=timezone)
+    if not content:
+        return ""
+    return _strip_note_template(content)
 
 
 async def get_survey_data(

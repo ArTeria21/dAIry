@@ -33,6 +33,7 @@ In an era of closed platforms, **dAIry** focuses on data sovereignty.
 
 - **📝 Text & Voice Journaling:** Send text messages or voice notes.
 - **🎙️ AI Transcription:** Voice messages are automatically transcribed using state-of-the-art models (via OpenRouter/VoxTral) before saving.
+- **🧠 Deep Questions:** AI-generated daily philosophical/reflection questions to prompt your journaling, avoiding repetitive topics.
 - **📊 Daily Surveys:** Morning (10:00) and evening (20:00) check-ins to track your mood, energy, sleep, habits, and more.
 - **🔄 Auto-Git Sync:** Automatically pulls changes before writing and pushes updates after saving.
 - **🔒 Privacy Focused:** Single-user architecture. The bot only talks to _you_.
@@ -80,6 +81,16 @@ All survey data is stored in YAML frontmatter of daily notes, grouped thematical
 - **Weather:** city, temperature_max, pressure, cloud_cover, uv_index
 - **Habits:** supplements, tea_time, english_words, zero_spending, reading
 
+### 🧠 Deep Questions
+
+The bot will automatically ask you one deep, thought-provoking question per day at a random time (between configured daytime hours) to encourage journaling even on "routine" days.
+
+- **AI-Powered:** Generates unique questions inspired by CBT, Stoicism, and Mindfulness.
+- **Context-Aware:** Sometimes (40% chance) uses a random past journal entry as context to ask a highly personalized question.
+- **No Repetition:** Analyzes the last 15 questions to ensure it doesn't repeat topics.
+- **Inline Answers:** You can answer the question right in Telegram via text or voice, and it will be embedded into the daily Markdown note under the question block.
+- **On-Demand:** Use the `/deep_question` command at any time to generate a new question manually.
+
 ### 📊 Google Sheets Integration (Optional)
 
 You can enable automatic export of survey data to Google Sheets:
@@ -115,12 +126,14 @@ src/
 └── dairy_bot/
     ├── config.py          # Configuration loading
     ├── handlers/          # Telegram message handlers
+    │   ├── deep_question.py # Deep question generation and answering
     │   ├── journal.py     # Text/voice processing
     │   └── survey.py      # Morning/evening surveys
     ├── middlewares/       # Auth and processing pipelines
     │   └── auth.py        # Security (white-list user)
     ├── services/          # Business logic
     │   ├── ai_service.py  # Voice transcription wrapper
+    │   ├── deep_question_service.py # Deep questions AI generation
     │   ├── git_sync.py    # Git operations (pull/commit/push)
     │   ├── scheduler.py   # Survey triggers
     │   ├── sheets_service.py # Google Sheets sync (optional)
@@ -145,6 +158,12 @@ src/
     BOT_TOKEN=your_bot_token
     ALLOWED_USER_ID=123456789
     OPENROUTER_API_KEY=your_key
+    # AI Models config
+    VOICE_MODEL_NAME=mistralai/voxtral-small-24b-2507
+    QUESTION_MODEL_NAME=openai/gpt-4.1-mini
+    QUESTION_LANGUAGE=en
+    DEEP_QUESTION_START_HOUR=11
+    DEEP_QUESTION_END_HOUR=20
     # Path inside container
     JOURNAL_DIR=/data
     # Path on your host machine to your notes repo
@@ -184,6 +203,7 @@ src/
 | `/today` | View today's journal entries |
 | `/morning` | Start or view morning survey |
 | `/evening` | Start or view evening survey |
+| `/deep_question` | Generate a deep reflection question |
 
 ### 🔧 Developer Guide: Adding New Fields
 
@@ -266,6 +286,7 @@ HEADERS = [
 
 - **📝 Текст и Голос:** Отправляйте текстовые сообщения или голосовые заметки.
 - **🎙️ AI Транскрибация:** Голосовые сообщения автоматически расшифровываются в текст с помощью современных моделей (через OpenRouter/VoxTral).
+- **🧠 Глубокие вопросы (Deep Questions):** Ежедневные философские вопросы для рефлексии от AI, помогающие вести дневник даже в рутинные дни.
 - **📊 Ежедневные опросы:** Утренний (10:00) и вечерний (20:00) чек-ины для отслеживания настроения, энергии, сна, привычек и многого другого.
 - **🔄 Авто-Git Sync:** Бот делает `git pull` перед записью и `git push` после.
 - **🔒 Приватность:** Бот работает только для одного пользователя (вас).
@@ -313,6 +334,16 @@ HEADERS = [
 - **Погода:** city, temperature_max, pressure, cloud_cover, uv_index
 - **Привычки:** supplements, tea_time, english_words, zero_spending, reading
 
+### 🧠 Глубокие вопросы (Deep Questions)
+
+Бот автоматически задаст вам один глубокий вопрос в случайное время дня (между заданными дневными часами), чтобы стимулировать рефлексию даже в обычные, «рутинные» дни.
+
+- **Генерация через AI:** Уникальные вопросы, основанные на КПТ (когнитивно-поведенческой терапии), стоицизме и практиках осознанности.
+- **Учёт контекста:** Иногда (с вероятностью 40%) бот берёт случайную прошлую запись из вашего дневника и генерирует очень личный, персонализированный вопрос.
+- **Без повторов:** Бот анализирует 15 последних заданных вопросов и следит за тем, чтобы темы не повторялись.
+- **Ответы прямо в Telegram:** Вы можете нажать «Ответить» и записать голосовое или текстовое сообщение. Ответ автоматически встроится в блок вопроса в дневной Markdown-заметке.
+- **По запросу:** Вы всегда можете использовать команду `/deep_question`, чтобы вручную сгенерировать вопрос для рефлексии в любой момент.
+
 ### 📊 Интеграция с Google Sheets (Опционально)
 
 Можно включить автоматический экспорт данных опросов в Google Таблицы:
@@ -348,12 +379,14 @@ src/
 └── dairy_bot/
     ├── config.py          # Загрузка настроек
     ├── handlers/          # Обработчики сообщений
+    │   ├── deep_question.py # Генерация и ответы на глубокие вопросы
     │   ├── journal.py     # Основная логика (текст/голос)
     │   └── survey.py      # Утренние/вечерние опросы
     ├── middlewares/       # Middleware (авторизация)
     │   └── auth.py        # Проверка ID пользователя
     ├── services/          # Бизнес-логика
     │   ├── ai_service.py  # Обертка для транскрибации
+    │   ├── deep_question_service.py # AI генерация вопросов
     │   ├── git_sync.py    # Работа с Git (pull/commit/push)
     │   ├── scheduler.py   # Триггеры опросов
     │   ├── sheets_service.py # Синхронизация с Google Sheets (опц.)
@@ -378,6 +411,12 @@ src/
     BOT_TOKEN=your_bot_token
     ALLOWED_USER_ID=123456789
     OPENROUTER_API_KEY=your_key
+    # Настройки AI Моделей
+    VOICE_MODEL_NAME=mistralai/voxtral-small-24b-2507
+    QUESTION_MODEL_NAME=openai/gpt-4.1-mini
+    QUESTION_LANGUAGE=ru
+    DEEP_QUESTION_START_HOUR=11
+    DEEP_QUESTION_END_HOUR=20
     # Путь внутри контейнера
     JOURNAL_DIR=/data
     # Путь на хост-машине к вашему репозиторию с заметками
@@ -417,6 +456,7 @@ src/
 | `/today` | Показать записи за сегодня |
 | `/morning` | Начать или посмотреть утренний опрос |
 | `/evening` | Начать или посмотреть вечерний опрос |
+| `/deep_question` | Сгенерировать глубокий вопрос для рефлексии |
 
 ### 🔧 Руководство разработчика: Добавление новых полей
 
