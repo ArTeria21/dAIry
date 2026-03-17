@@ -19,6 +19,7 @@ from dairy_bot.services.ai_service import transcribe_audio
 from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.language_store import get_language, set_language
 from dairy_bot.services.storage import append_entry, read_daily_note_entries
+from dairy_bot.services.toc_service import reconcile_toc
 from dairy_bot.texts import LANG_BUTTONS, messages
 
 router = Router()
@@ -114,7 +115,12 @@ async def _save_entry_with_sync(
         note_path = await append_entry(
             settings.journal_dir, content, timezone=settings.timezone
         )
-        pushed = await asyncio.to_thread(git_service.commit_and_push, note_path)
+        toc_paths = await reconcile_toc(
+            settings.journal_dir, settings, target_paths=[note_path]
+        )
+        pushed = await asyncio.to_thread(
+            git_service.commit_and_push, [note_path] + toc_paths
+        )
         return pulled and pushed
 
 

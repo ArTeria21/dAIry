@@ -52,6 +52,8 @@ DEFAULT_SURVEY_DATA: dict[str, Any] = {
     },
 }
 
+GENERATED_FILENAMES = {"table_of_contents.md", ".toc_index.json"}
+
 DATE_HEADER_RE = re.compile(r"^#\s+\d{4}-\d{2}-\d{2}\s*$")
 SECTION_HEADER_RE = re.compile(r"^##\s+\d{2}:\d{2}\s*$")
 QUESTION_ID_RE = re.compile(r"^Question ID:\s*(.+?)\s*$")
@@ -59,6 +61,7 @@ SOURCE_RE = re.compile(r"^Source:\s*(.+?)\s*$")
 DEEP_QUESTION_MARKER = "**Deep Question**"
 DEEP_ANSWER_MARKER = "**Deep Answer**"
 DAILY_DEEP_QUESTION_KEY = "deep_question_daily_sent"
+DEEP_QUESTIONS_ASKED_KEY = "deep_questions_asked"
 
 
 def _now(moment: datetime | None = None, timezone: ZoneInfo | None = None) -> datetime:
@@ -514,25 +517,24 @@ async def append_deep_question(
     await _ensure_daily_template(journal_dir, note_path, current)
     await _update_neighbor_nav(journal_dir, current)
 
-    payload = (
-        f"## {current:%H:%M}\n\n"
-        f"{DEEP_QUESTION_MARKER}\n"
-        "\n"
-        f"{question.strip()}\n\n"
-    )
-    async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
-        await file.write(payload)
+    try:
+        async with aiofiles.open(note_path, "r", encoding="utf-8") as file:
+            content = await file.read()
+    except FileNotFoundError:
+        content = ""
+
+    existing_data, rest_content = _parse_frontmatter(content)
+    asked_questions = existing_data.get(DEEP_QUESTIONS_ASKED_KEY)
+    if not isinstance(asked_questions, list):
+        asked_questions = []
+    asked_questions.append(question.strip())
+    existing_data[DEEP_QUESTIONS_ASKED_KEY] = asked_questions
     if source == "daily":
-        try:
-            async with aiofiles.open(note_path, "r", encoding="utf-8") as file:
-                content = await file.read()
-        except FileNotFoundError:
-            content = ""
-        existing_data, rest_content = _parse_frontmatter(content)
         existing_data[DAILY_DEEP_QUESTION_KEY] = True
-        new_content = _build_frontmatter(existing_data) + rest_content
-        async with aiofiles.open(note_path, "w", encoding="utf-8") as file:
-            await file.write(new_content)
+
+    new_content = _build_frontmatter(existing_data) + rest_content
+    async with aiofiles.open(note_path, "w", encoding="utf-8") as file:
+        await file.write(new_content)
     return note_path
 
 
@@ -555,31 +557,20 @@ async def append_deep_answer(
         content = ""
 
     frontmatter_data, rest_content = _parse_frontmatter(content)
-    lines = rest_content.splitlines(keepends=True)
-    block_range = _find_question_block_range(lines, question_text)
     normalized_answer = answer.strip()
 
-    if block_range is None:
-        payload = (
-            f"## {current:%H:%M}\n\n"
-            f"{DEEP_QUESTION_MARKER}\n\n"
-            f"{question_text.strip()}\n\n"
-            f"{DEEP_ANSWER_MARKER}\n\n"
-            f"{normalized_answer}\n\n"
-        )
-        async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
-            await file.write(payload)
-        return note_path
-
-    _, end_idx, has_answer = block_range
-    insertion_lines: list[str]
-    if has_answer:
-        insertion_lines = [f"\n{normalized_answer}\n\n"]
-    else:
-        insertion_lines = [f"\n{DEEP_ANSWER_MARKER}\n\n{normalized_answer}\n\n"]
-    lines[end_idx:end_idx] = insertion_lines
+    payload = (
+        f"## {current:%H:%M}\n\n"
+        f"{DEEP_QUESTION_MARKER}\n\n"
+        f"{question_text.strip()}\n\n"
+        f"{DEEP_ANSWER_MARKER}\n\n"
+        f"{normalized_answer}\n\n"
+    )
     new_frontmatter = _build_frontmatter(frontmatter_data) if frontmatter_data else ""
-    new_content = new_frontmatter + "".join(lines)
+    new_content = new_frontmatter + rest_content
+    if new_content and not new_content.endswith("\n"):
+        new_content += "\n"
+    new_content += payload
     async with aiofiles.open(note_path, "w", encoding="utf-8") as file:
         await file.write(new_content)
     return note_path
@@ -587,20 +578,39 @@ async def append_deep_answer(
 
 async def list_recent_deep_questions(journal_dir: Path, limit: int = 15) -> list[str]:
     note_paths = sorted(
-        [path for path in journal_dir.rglob("*.md") if path.is_file()],
+        [
+            path
+            for path in journal_dir.rglob("*.md")
+            if path.is_file() and path.name not in GENERATED_FILENAMES
+        ],
         reverse=True,
     )
     questions: list[str] = []
+    seen_questions: set[str] = set()
     for note_path in note_paths:
         try:
             async with aiofiles.open(note_path, "r", encoding="utf-8") as file:
                 content = await file.read()
         except FileNotFoundError:
             continue
+        frontmatter_data, _ = _parse_frontmatter(content)
+        asked_questions = frontmatter_data.get(DEEP_QUESTIONS_ASKED_KEY, [])
+        if isinstance(asked_questions, list):
+            for item in reversed(asked_questions):
+                question = str(item).strip()
+                normalized = _normalize_block_text(question)
+                if question and normalized not in seen_questions:
+                    questions.append(question)
+                    seen_questions.add(normalized)
+                if len(questions) >= limit:
+                    return questions[:limit]
         parsed_questions, _ = _parse_deep_blocks(content)
         for item in reversed(parsed_questions):
-            if item["text"]:
+            question = item["text"]
+            normalized = _normalize_block_text(question)
+            if question and normalized not in seen_questions:
                 questions.append(item["text"])
+                seen_questions.add(normalized)
             if len(questions) >= limit:
                 return questions[:limit]
     return questions[:limit]
@@ -615,6 +625,8 @@ async def pick_random_substantive_note(
     candidates: list[Path] = []
     for note_path in journal_dir.rglob("*.md"):
         if not note_path.is_file() or note_path == today_path:
+            continue
+        if note_path.name in GENERATED_FILENAMES:
             continue
         candidates.append(note_path)
     random.shuffle(candidates)

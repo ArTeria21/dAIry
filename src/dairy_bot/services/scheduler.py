@@ -1,17 +1,20 @@
+import asyncio
 import logging
 import random
 from datetime import datetime, timedelta
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from dairy_bot.config import Settings
 from dairy_bot.handlers.deep_question import send_daily_deep_question
 from dairy_bot.handlers.survey import send_evening_invite, send_morning_invite
 from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.storage import day_has_daily_question_sent
+from dairy_bot.services.toc_service import reconcile_toc
 
 logger = logging.getLogger(__name__)
 
@@ -160,5 +163,24 @@ def setup_scheduler(
         settings=settings,
         git_service=git_service,
     )
+
+    if settings.toc_enabled:
+        async def toc_reconcile_job() -> None:
+            try:
+                toc_paths = await reconcile_toc(settings.journal_dir, settings)
+                if toc_paths:
+                    await asyncio.to_thread(git_service.commit_and_push, toc_paths)
+            except Exception:
+                logger.exception("Periodic TOC reconciliation failed")
+
+        scheduler.add_job(
+            toc_reconcile_job,
+            trigger=IntervalTrigger(
+                minutes=settings.toc_scan_interval_minutes,
+                timezone=settings.timezone,
+            ),
+            id="toc_reconcile",
+            replace_existing=True,
+        )
 
     return scheduler

@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -65,22 +66,31 @@ class GitService:
             logger.exception("Unexpected error during git pull")
         return False
 
-    def commit_and_push(self, file_path: Path) -> bool:
-        """Stage the given file, create a commit if needed, and push."""
+    def commit_and_push(self, file_paths: Path | Sequence[Path]) -> bool:
+        """Stage one or more files, create a commit if needed, and push."""
         if not self.enabled:
             return True
+
+        paths = [file_paths] if isinstance(file_paths, Path) else list(file_paths)
+        if not paths:
+            return True
+
         try:
             repo = self._ensure_repo()
-            rel_path = file_path.resolve().relative_to(repo.working_tree_dir)
+            rel_paths: list[str] = []
+            for fp in paths:
+                rel_paths.append(
+                    str(fp.resolve().relative_to(repo.working_tree_dir))
+                )
         except (NoSuchPathError, InvalidGitRepositoryError, ValueError):
             logger.exception(
-                "Cannot resolve journal file inside repo",
-                extra={"file": str(file_path)},
+                "Cannot resolve journal file(s) inside repo",
+                extra={"files": [str(p) for p in paths]},
             )
             return False
 
         try:
-            repo.index.add([str(rel_path)])
+            repo.index.add(rel_paths)
             has_staged_changes = repo.is_dirty(
                 index=True, working_tree=False, untracked_files=False
             )
@@ -96,11 +106,13 @@ class GitService:
             return True
         except GitCommandError as exc:
             logger.exception(
-                "Git commit/push failed (%s)", _format_git_error(exc), extra={"file": str(file_path)}
+                "Git commit/push failed (%s)",
+                _format_git_error(exc),
+                extra={"files": [str(p) for p in paths]},
             )
         except Exception:  # pragma: no cover - defensive
             logger.exception(
                 "Unexpected error during git commit/push",
-                extra={"file": str(file_path)},
+                extra={"files": [str(p) for p in paths]},
             )
         return False

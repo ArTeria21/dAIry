@@ -25,6 +25,7 @@ from dairy_bot.services.storage import (
     list_recent_deep_questions,
     pick_random_substantive_note,
 )
+from dairy_bot.services.toc_service import reconcile_toc
 from dairy_bot.texts import messages
 
 router = Router()
@@ -142,7 +143,12 @@ async def _generate_and_store_question(
             source=source,
             timezone=settings.timezone,
         )
-        await asyncio.to_thread(git_service.commit_and_push, note_path)
+        toc_paths = await reconcile_toc(
+            settings.journal_dir, settings, target_paths=[note_path]
+        )
+        await asyncio.to_thread(
+            git_service.commit_and_push, [note_path] + toc_paths
+        )
     return question
 
 
@@ -161,7 +167,12 @@ async def _save_answer(
             question_text=question_text,
             timezone=settings.timezone,
         )
-        await asyncio.to_thread(git_service.commit_and_push, note_path)
+        toc_paths = await reconcile_toc(
+            settings.journal_dir, settings, target_paths=[note_path]
+        )
+        await asyncio.to_thread(
+            git_service.commit_and_push, [note_path] + toc_paths
+        )
         if sheets_service and sheets_service.enabled:
             full_data = await get_survey_data(
                 settings.journal_dir, timezone=settings.timezone

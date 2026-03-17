@@ -23,6 +23,7 @@ from dairy_bot.services.storage import (
     is_morning_survey_filled,
     save_survey_data,
 )
+from dairy_bot.services.toc_service import reconcile_toc
 from dairy_bot.services.weather_service import (
     get_city_weather,
     get_vienna_weather,
@@ -124,11 +125,14 @@ async def _save_with_sync(
         note_path = await save_survey_data(
             journal_dir, updates, moment=moment, timezone=settings.timezone
         )
-        pushed = await asyncio.to_thread(git_service.commit_and_push, note_path)
+        toc_paths = await reconcile_toc(
+            journal_dir, settings, target_paths=[note_path]
+        )
+        pushed = await asyncio.to_thread(
+            git_service.commit_and_push, [note_path] + toc_paths
+        )
 
-        # Sync to Google Sheets if enabled
         if sheets_service and sheets_service.enabled:
-            # Get full survey data for the day to sync complete row
             full_data = await get_survey_data(
                 journal_dir, moment=moment, timezone=settings.timezone
             )
