@@ -12,6 +12,7 @@ from dairy_bot.middlewares.auth import AuthMiddleware
 from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.scheduler import recover_daily_deep_question, setup_scheduler
 from dairy_bot.services.sheets_service import SheetsService
+from dairy_bot.services.toc_service import reconcile_toc
 
 
 async def main() -> None:
@@ -52,6 +53,19 @@ async def main() -> None:
     await recover_daily_deep_question(
         scheduler=scheduler, bot=bot, settings=settings, git_service=git_service
     )
+
+    if settings.toc_enabled:
+        logger = logging.getLogger(__name__)
+        logger.info("Running initial TOC indexing...")
+        try:
+            toc_paths = await reconcile_toc(settings.journal_dir, settings)
+            if toc_paths:
+                await asyncio.to_thread(git_service.commit_and_push, toc_paths)
+                logger.info("Initial TOC indexing complete, %d files updated", len(toc_paths))
+            else:
+                logger.info("Initial TOC indexing complete, everything up to date")
+        except Exception:
+            logger.exception("Initial TOC indexing failed, will retry on next periodic scan")
 
     try:
         await dispatcher.start_polling(
