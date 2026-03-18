@@ -14,7 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dairy_bot.config import Settings
 from dairy_bot.services.ai_service import transcribe_audio
 from dairy_bot.services.deep_question_service import generate_deep_question
-from dairy_bot.services.git_sync import GitService
+from dairy_bot.services.git_sync import GitPushError, GitService, GitSyncError
 from dairy_bot.services.language_store import get_language
 from dairy_bot.services.sheets_service import SheetsService
 from dairy_bot.services.storage import (
@@ -127,7 +127,7 @@ async def _generate_and_store_question(
     source: str,
 ) -> str:
     async with _get_deep_lock():
-        await asyncio.to_thread(git_service.pull_changes)
+        await asyncio.to_thread(git_service.prepare_for_write)
         recent_questions = await list_recent_deep_questions(settings.journal_dir, limit=15)
         random_note = await pick_random_substantive_note(
             settings.journal_dir, timezone=settings.timezone
@@ -146,9 +146,12 @@ async def _generate_and_store_question(
         toc_paths = await reconcile_toc(
             settings.journal_dir, settings, target_paths=[note_path]
         )
-        await asyncio.to_thread(
-            git_service.commit_and_push, [note_path] + toc_paths
-        )
+        try:
+            await asyncio.to_thread(
+                git_service.commit_and_push, [note_path] + toc_paths
+            )
+        except GitSyncError:
+            logger.warning("Deep question saved locally, but sync failed", exc_info=True)
     return question
 
 
@@ -160,7 +163,7 @@ async def _save_answer(
     sheets_service: SheetsService | None = None,
 ) -> None:
     async with _get_deep_lock():
-        await asyncio.to_thread(git_service.pull_changes)
+        await asyncio.to_thread(git_service.prepare_for_write)
         note_path = await append_deep_answer(
             journal_dir=settings.journal_dir,
             answer=answer,
@@ -170,9 +173,12 @@ async def _save_answer(
         toc_paths = await reconcile_toc(
             settings.journal_dir, settings, target_paths=[note_path]
         )
-        await asyncio.to_thread(
-            git_service.commit_and_push, [note_path] + toc_paths
-        )
+        try:
+            await asyncio.to_thread(
+                git_service.commit_and_push, [note_path] + toc_paths
+            )
+        except GitPushError:
+            logger.warning("Deep answer saved locally, but sync failed", exc_info=True)
         if sheets_service and sheets_service.enabled:
             full_data = await get_survey_data(
                 settings.journal_dir, timezone=settings.timezone
@@ -209,6 +215,20 @@ async def cmd_deep_question(
             git_service=git_service,
             source=SOURCE_MANUAL,
         )
+    except GitSyncError:
+        if progress_message:
+            await _safe_respond(
+                "deep question sync blocked edit",
+                lambda: progress_message.edit_text(
+                    messages.t("repo_sync_blocked", lang)
+                ),
+            )
+        else:
+            await _safe_respond(
+                "deep question sync blocked",
+                lambda: message.answer(messages.t("repo_sync_blocked", lang)),
+            )
+        return
     except RuntimeError:
         if progress_message:
             await _safe_respond(
@@ -268,6 +288,23 @@ async def regenerate_question(
             git_service=git_service,
             source=source,
         )
+    except GitSyncError:
+        if callback.message:
+            if progress_set:
+                await _safe_respond(
+                    "deep regenerate sync blocked edit",
+                    lambda: callback.message.edit_text(
+                        messages.t("repo_sync_blocked", lang)
+                    ),
+                )
+            else:
+                await _safe_respond(
+                    "deep regenerate sync blocked message",
+                    lambda: callback.message.answer(
+                        messages.t("repo_sync_blocked", lang)
+                    ),
+                )
+        return
     except RuntimeError:
         if callback.message:
             if progress_set:
@@ -340,13 +377,21 @@ async def save_text_answer(
             lambda: message.answer(messages.t("deep_question_answer_missing", lang)),
         )
         return
-    await _save_answer(
-        message.text or "",
-        question_text,
-        settings,
-        git_service,
-        sheets_service=sheets_service,
-    )
+    try:
+        await _save_answer(
+            message.text or "",
+            question_text,
+            settings,
+            git_service,
+            sheets_service=sheets_service,
+        )
+    except GitSyncError:
+        await state.clear()
+        await _safe_respond(
+            "deep answer sync blocked",
+            lambda: message.answer(messages.t("repo_sync_blocked", lang)),
+        )
+        return
     await state.clear()
     await _safe_respond(
         "deep answer saved",
@@ -443,13 +488,26 @@ async def confirm_voice_answer(
             lambda: callback.answer(messages.t("nothing_to_save", lang), show_alert=True),
         )
         return
-    await _save_answer(
-        transcription,
-        question_text,
-        settings,
-        git_service,
-        sheets_service=sheets_service,
-    )
+    try:
+        await _save_answer(
+            transcription,
+            question_text,
+            settings,
+            git_service,
+            sheets_service=sheets_service,
+        )
+    except GitSyncError:
+        await state.clear()
+        await _safe_respond(
+            "deep voice save blocked",
+            lambda: callback.answer(messages.t("repo_sync_blocked", lang), show_alert=True),
+        )
+        if callback.message:
+            await _safe_respond(
+                "deep voice save blocked message",
+                lambda: callback.message.answer(messages.t("repo_sync_blocked", lang)),
+            )
+        return
     await state.clear()
     await _safe_respond(
         "deep voice save callback answer",
@@ -502,13 +560,21 @@ async def save_edited_voice_answer(
             lambda: message.answer(messages.t("deep_question_answer_missing", lang)),
         )
         return
-    await _save_answer(
-        message.text or "",
-        question_text,
-        settings,
-        git_service,
-        sheets_service=sheets_service,
-    )
+    try:
+        await _save_answer(
+            message.text or "",
+            question_text,
+            settings,
+            git_service,
+            sheets_service=sheets_service,
+        )
+    except GitSyncError:
+        await state.clear()
+        await _safe_respond(
+            "deep edited voice sync blocked",
+            lambda: message.answer(messages.t("repo_sync_blocked", lang)),
+        )
+        return
     await state.clear()
     await _safe_respond(
         "deep edited voice saved",
@@ -543,6 +609,9 @@ async def send_daily_deep_question(
             git_service=git_service,
             source=SOURCE_DAILY,
         )
+    except GitSyncError:
+        logger.warning("Daily deep question skipped because repo sync is blocked", exc_info=True)
+        return False
     except RuntimeError:
         logger.exception("Failed to generate daily deep question")
         return False

@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from dairy_bot.config import Settings
-from dairy_bot.services.git_sync import GitService
+from dairy_bot.services.git_sync import GitService, GitSyncError
 from dairy_bot.services.language_store import get_language
 from dairy_bot.services.sheets_service import SheetsService
 from dairy_bot.services.storage import (
@@ -118,19 +118,27 @@ async def _save_with_sync(
     git_service: GitService,
     sheets_service: SheetsService | None = None,
     moment: datetime | None = None,
-) -> bool:
+) -> str:
     """Save survey data with git sync and optional Google Sheets sync."""
     async with _get_survey_lock():
-        pulled = await asyncio.to_thread(git_service.pull_changes)
+        try:
+            await asyncio.to_thread(git_service.prepare_for_write)
+        except GitSyncError:
+            logger.warning("Git sync blocked survey write", exc_info=True)
+            return "blocked"
         note_path = await save_survey_data(
             journal_dir, updates, moment=moment, timezone=settings.timezone
         )
         toc_paths = await reconcile_toc(
             journal_dir, settings, target_paths=[note_path]
         )
-        pushed = await asyncio.to_thread(
-            git_service.commit_and_push, [note_path] + toc_paths
-        )
+        try:
+            result = await asyncio.to_thread(
+                git_service.commit_and_push, [note_path] + toc_paths
+            )
+        except GitSyncError:
+            logger.warning("Git push failed after survey write", exc_info=True)
+            result = None
 
         if sheets_service and sheets_service.enabled:
             full_data = await get_survey_data(
@@ -146,7 +154,32 @@ async def _save_with_sync(
                 deep_answers_count,
             )
 
-        return pulled and pushed
+        if result is None:
+            return "local_only"
+        return "synced" if result.pushed else "local_only"
+
+
+async def _sync_for_read(git_service: GitService, action: str) -> None:
+    try:
+        await asyncio.to_thread(git_service.sync_from_remote, allow_dirty=True)
+    except GitSyncError:
+        logger.warning("Git sync failed before %s; using local view", action, exc_info=True)
+
+
+def _save_status_key(save_state: str) -> str:
+    if save_state == "blocked":
+        return "repo_sync_blocked"
+    if save_state == "synced":
+        return "survey_saved_synced"
+    return "survey_saved_local"
+
+
+def _combine_save_states(*states: str) -> str:
+    if any(state == "blocked" for state in states):
+        return "blocked"
+    if all(state == "synced" for state in states):
+        return "synced"
+    return "local_only"
 
 
 def build_rating_keyboard(prefix: str, min_val: int, max_val: int, lang: str) -> InlineKeyboardBuilder:
@@ -358,7 +391,7 @@ async def cmd_evening(
     lang = _user_lang(message.from_user.id if message.from_user else None)
 
     async with _get_survey_lock():
-        await asyncio.to_thread(git_service.pull_changes)
+        await _sync_for_read(git_service, "/evening")
         data = await get_survey_data(settings.journal_dir, timezone=settings.timezone)
 
     if is_evening_survey_filled(data):
@@ -682,10 +715,10 @@ async def evening_habits_done(
         await _safe_respond("habits done delete", callback.message.delete)
 
     # Save to storage
-    synced = await _save_with_sync(
+    save_state = await _save_with_sync(
         settings.journal_dir, survey_data, settings, git_service, sheets_service
     )
-    status_key = "survey_saved_synced" if synced else "survey_saved_local"
+    status_key = _save_status_key(save_state)
 
     await _safe_respond(
         "evening done",
@@ -709,10 +742,10 @@ async def evening_habits_skip(
         await _safe_respond("skip delete", callback.message.delete)
 
     # Save to storage
-    synced = await _save_with_sync(
+    save_state = await _save_with_sync(
         settings.journal_dir, survey_data, settings, git_service, sheets_service
     )
-    status_key = "survey_saved_synced" if synced else "survey_saved_local"
+    status_key = _save_status_key(save_state)
 
     await _safe_respond(
         "evening done",
@@ -731,7 +764,7 @@ async def cmd_morning(
     lang = _user_lang(message.from_user.id if message.from_user else None)
 
     async with _get_survey_lock():
-        await asyncio.to_thread(git_service.pull_changes)
+        await _sync_for_read(git_service, "/morning")
         data = await get_survey_data(settings.journal_dir, timezone=settings.timezone)
 
     if is_morning_survey_filled(data):
@@ -1068,17 +1101,17 @@ async def morning_reading_answer(
     yesterday = now - timedelta(days=1)
 
     # Save today's data
-    synced_today = await _save_with_sync(
+    saved_today = await _save_with_sync(
         settings.journal_dir, survey_data, settings, git_service, sheets_service
     )
 
     # Save yesterday's data (bedtime + reading)
-    synced_yesterday = await _save_with_sync(
+    saved_yesterday = await _save_with_sync(
         settings.journal_dir, yesterday_data, settings, git_service, sheets_service, moment=yesterday
     )
 
-    synced = synced_today and synced_yesterday
-    status_key = "survey_saved_synced" if synced else "survey_saved_local"
+    save_state = _combine_save_states(saved_today, saved_yesterday)
+    status_key = _save_status_key(save_state)
 
     await _safe_respond(
         "morning done",
@@ -1107,19 +1140,19 @@ async def morning_reading_skip(
     yesterday = now - timedelta(days=1)
 
     # Save today's data
-    synced_today = await _save_with_sync(
+    saved_today = await _save_with_sync(
         settings.journal_dir, survey_data, settings, git_service, sheets_service
     )
 
     # Save yesterday's data if any
-    synced_yesterday = True
+    saved_yesterday = "synced"
     if yesterday_data:
-        synced_yesterday = await _save_with_sync(
+        saved_yesterday = await _save_with_sync(
             settings.journal_dir, yesterday_data, settings, git_service, sheets_service, moment=yesterday
         )
 
-    synced = synced_today and synced_yesterday
-    status_key = "survey_saved_synced" if synced else "survey_saved_local"
+    save_state = _combine_save_states(saved_today, saved_yesterday)
+    status_key = _save_status_key(save_state)
 
     await _safe_respond(
         "morning done",

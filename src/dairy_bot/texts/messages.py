@@ -27,6 +27,10 @@ MESSAGES = {
         LANG_EN: "✅ Saved locally, but sync failed.",
         LANG_RU: "✅ Сохранено локально, но синхронизация не удалась.",
     },
+    "repo_sync_blocked": {
+        LANG_EN: "⚠️ I couldn't sync the journal repo safely. Commit, stash, or revert local changes first, then try again.",
+        LANG_RU: "⚠️ Я не смог безопасно синхронизировать репозиторий журнала. Сначала закоммить, убери в stash или откати локальные изменения, потом попробуй ещё раз.",
+    },
     "voice_pending_decision": {
         LANG_EN: "You still have a voice note waiting. Confirm or edit it first.",
         LANG_RU: "У вас есть неподтверждённая голосовая заметка. Сначала подтвердите или исправьте её.",

@@ -8,6 +8,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git openssh-client ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd --gid 1000 dairybot \
+    && useradd --uid 1000 --gid 1000 --home-dir /tmp --no-create-home --shell /bin/sh dairybot
+
 WORKDIR /app
 
 RUN pip install --no-cache-dir uv
@@ -26,4 +29,3 @@ ENV PATH="/app/.venv/bin:${PATH}"
 RUN git config --global --add safe.directory /data
 
 CMD ["python", "src/bot.py"]
-

@@ -2,14 +2,22 @@ services:
   dairy-bot:
     build: .
     image: dairy-bot:latest
+    user: "1000:1000"
     env_file:
       - .env
     environment:
+      HOME: /tmp
       JOURNAL_DIR: /data
       GOOGLE_CREDS_FILE: /app/gcp_creds.json
+      GIT_AUTHOR_NAME: dairy-bot
+      GIT_AUTHOR_EMAIL: dairy-bot@local
+      GIT_COMMITTER_NAME: dairy-bot
+      GIT_COMMITTER_EMAIL: dairy-bot@local
+      GIT_SSH_COMMAND: "ssh -i /tmp/ssh/github_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/tmp/ssh/known_hosts"
     volumes:
       - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/data
-      - ${HOME}/.ssh:/root/.ssh:ro
+      - ${HOME}/.ssh/github_ed25519:/tmp/ssh/github_ed25519:ro
+      - ${HOME}/.ssh/known_hosts:/tmp/ssh/known_hosts:ro
       - ./gcp_creds.json:/app/gcp_creds.json:ro
     init: true
     restart: unless-stopped

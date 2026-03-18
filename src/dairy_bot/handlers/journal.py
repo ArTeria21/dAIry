@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from dairy_bot.config import Settings
 from dairy_bot.services.ai_service import transcribe_audio
-from dairy_bot.services.git_sync import GitService
+from dairy_bot.services.git_sync import GitService, GitSyncError
 from dairy_bot.services.language_store import get_language, set_language
 from dairy_bot.services.storage import append_entry, read_daily_note_entries
 from dairy_bot.services.toc_service import reconcile_toc
@@ -109,19 +109,34 @@ def _get_journal_lock() -> asyncio.Lock:
 
 async def _save_entry_with_sync(
     content: str, settings: Settings, git_service: GitService
-) -> bool:
+) -> str:
     async with _get_journal_lock():
-        pulled = await asyncio.to_thread(git_service.pull_changes)
+        try:
+            await asyncio.to_thread(git_service.prepare_for_write)
+        except GitSyncError:
+            logger.warning("Git sync blocked journal write", exc_info=True)
+            return "blocked"
         note_path = await append_entry(
             settings.journal_dir, content, timezone=settings.timezone
         )
         toc_paths = await reconcile_toc(
             settings.journal_dir, settings, target_paths=[note_path]
         )
-        pushed = await asyncio.to_thread(
-            git_service.commit_and_push, [note_path] + toc_paths
-        )
-        return pulled and pushed
+        try:
+            result = await asyncio.to_thread(
+                git_service.commit_and_push, [note_path] + toc_paths
+            )
+        except GitSyncError:
+            logger.warning("Git push failed after journal write", exc_info=True)
+            return "local_only"
+        return "synced" if result.pushed else "local_only"
+
+
+async def _sync_for_read(git_service: GitService, action: str) -> None:
+    try:
+        await asyncio.to_thread(git_service.sync_from_remote, allow_dirty=True)
+    except GitSyncError:
+        logger.warning("Git sync failed before %s; using local view", action, exc_info=True)
 
 
 @router.message(CommandStart())
@@ -149,9 +164,7 @@ async def handle_today(
     lang = _user_lang(message.from_user.id if message.from_user else None)
 
     async with _get_journal_lock():
-        pulled = await asyncio.to_thread(git_service.pull_changes)
-        if not pulled:
-            logger.warning("Git pull failed before responding to /today")
+        await _sync_for_read(git_service, "/today")
         content = await read_daily_note_entries(
             settings.journal_dir, timezone=settings.timezone
         )
@@ -214,8 +227,8 @@ async def handle_edit(
     message: Message, state: FSMContext, settings: Settings, git_service: GitService
 ) -> None:
     lang = _user_lang(message.from_user.id if message.from_user else None)
-    synced = await _save_entry_with_sync(message.text, settings, git_service)
-    status_key = "save_synced" if synced else "save_local_only"
+    save_state = await _save_entry_with_sync(message.text, settings, git_service)
+    status_key = "repo_sync_blocked" if save_state == "blocked" else "save_synced" if save_state == "synced" else "save_local_only"
     await _safe_respond(
         "edit save confirmation", lambda: message.answer(messages.t(status_key, lang))
     )
@@ -227,8 +240,8 @@ async def handle_text(
     message: Message, state: FSMContext, settings: Settings, git_service: GitService
 ) -> None:
     lang = _user_lang(message.from_user.id if message.from_user else None)
-    synced = await _save_entry_with_sync(message.text, settings, git_service)
-    status_key = "save_synced" if synced else "save_local_only"
+    save_state = await _save_entry_with_sync(message.text, settings, git_service)
+    status_key = "repo_sync_blocked" if save_state == "blocked" else "save_synced" if save_state == "synced" else "save_local_only"
     await _safe_respond(
         "text save confirmation", lambda: message.answer(messages.t(status_key, lang))
     )
@@ -316,8 +329,8 @@ async def confirm_voice(
         await state.clear()
         return
 
-    synced = await _save_entry_with_sync(transcription, settings, git_service)
-    status_key = "save_synced" if synced else "save_local_only"
+    save_state = await _save_entry_with_sync(transcription, settings, git_service)
+    status_key = "repo_sync_blocked" if save_state == "blocked" else "save_synced" if save_state == "synced" else "save_local_only"
     await _safe_respond(
         "voice confirm callback answer",
         lambda: callback.answer(messages.t(status_key, lang)),

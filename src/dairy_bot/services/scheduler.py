@@ -12,7 +12,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from dairy_bot.config import Settings
 from dairy_bot.handlers.deep_question import send_daily_deep_question
 from dairy_bot.handlers.survey import send_evening_invite, send_morning_invite
-from dairy_bot.services.git_sync import GitService
+from dairy_bot.services.git_sync import GitPushError, GitService, GitSyncError
 from dairy_bot.services.storage import day_has_daily_question_sent
 from dairy_bot.services.toc_service import reconcile_toc
 
@@ -167,9 +167,15 @@ def setup_scheduler(
     if settings.toc_enabled:
         async def toc_reconcile_job() -> None:
             try:
+                await asyncio.to_thread(git_service.prepare_for_write)
                 toc_paths = await reconcile_toc(settings.journal_dir, settings)
                 if toc_paths:
-                    await asyncio.to_thread(git_service.commit_and_push, toc_paths)
+                    try:
+                        await asyncio.to_thread(git_service.commit_and_push, toc_paths)
+                    except GitPushError:
+                        logger.warning("Periodic TOC reconciliation saved locally, but push failed", exc_info=True)
+            except GitSyncError:
+                logger.warning("Skipping periodic TOC reconciliation because repo sync is blocked", exc_info=True)
             except Exception:
                 logger.exception("Periodic TOC reconciliation failed")
 

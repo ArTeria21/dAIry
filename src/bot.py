@@ -9,7 +9,7 @@ from dairy_bot.handlers.deep_question import router as deep_question_router
 from dairy_bot.handlers.journal import router as journal_router
 from dairy_bot.handlers.survey import router as survey_router
 from dairy_bot.middlewares.auth import AuthMiddleware
-from dairy_bot.services.git_sync import GitService
+from dairy_bot.services.git_sync import GitPushError, GitService, GitSyncError
 from dairy_bot.services.scheduler import recover_daily_deep_question, setup_scheduler
 from dairy_bot.services.sheets_service import SheetsService
 from dairy_bot.services.toc_service import reconcile_toc
@@ -58,12 +58,18 @@ async def main() -> None:
         logger = logging.getLogger(__name__)
         logger.info("Running initial TOC indexing...")
         try:
+            await asyncio.to_thread(git_service.prepare_for_write)
             toc_paths = await reconcile_toc(settings.journal_dir, settings)
             if toc_paths:
-                await asyncio.to_thread(git_service.commit_and_push, toc_paths)
+                try:
+                    await asyncio.to_thread(git_service.commit_and_push, toc_paths)
+                except GitPushError:
+                    logger.warning("Initial TOC indexing saved locally, but push failed", exc_info=True)
                 logger.info("Initial TOC indexing complete, %d files updated", len(toc_paths))
             else:
                 logger.info("Initial TOC indexing complete, everything up to date")
+        except GitSyncError:
+            logger.warning("Initial TOC indexing skipped because repo sync is blocked", exc_info=True)
         except Exception:
             logger.exception("Initial TOC indexing failed, will retry on next periodic scan")
 
