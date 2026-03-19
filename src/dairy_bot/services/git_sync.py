@@ -87,9 +87,6 @@ class GitService:
         if not repo.remotes:
             raise GitSyncError("No git remotes configured for journal repository")
 
-    def _refresh_index(self, repo: Repo) -> None:
-        repo.git.update_index("--refresh")
-
     def _assert_repo_writable(self, repo: Repo) -> None:
         git_dir = Path(repo.git_dir)
         objects_dir = git_dir / "objects"
@@ -101,12 +98,33 @@ class GitService:
                 raise GitPermissionError(f"Git metadata path is not writable: {path}")
 
     def _dirty_paths(self, repo: Repo) -> list[str]:
-        paths = {item.a_path for item in repo.index.diff(None)}
-        paths.update(repo.untracked_files)
-        return sorted(path for path in paths if path)
+        status_output = repo.git.status("--porcelain")
+        paths: list[str] = []
+        for line in status_output.splitlines():
+            if not line:
+                continue
+            entry = line[3:] if len(line) > 3 else line
+            if " -> " in entry:
+                _, entry = entry.split(" -> ", maxsplit=1)
+            entry = entry.strip()
+            if entry:
+                paths.append(entry)
+        return sorted(dict.fromkeys(paths))
+
+    def _stage_all_changes(self, repo: Repo) -> None:
+        repo.git.add(A=True)
+
+    def _has_staged_changes(self, repo: Repo) -> bool:
+        return bool(repo.git.diff("--cached", "--name-only").strip())
+
+    def _commit_staged_changes(self, repo: Repo, message_prefix: str) -> bool:
+        if not self._has_staged_changes(repo):
+            return False
+        timestamp = datetime.now(self.timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
+        repo.index.commit(f"{message_prefix}: {timestamp}")
+        return True
 
     def _ensure_clean_worktree(self, repo: Repo) -> None:
-        self._refresh_index(repo)
         dirty_paths = self._dirty_paths(repo)
         if dirty_paths:
             preview = ", ".join(dirty_paths[:10])
@@ -129,7 +147,7 @@ class GitService:
         except GitCommandError:
             logger.warning("Failed to abort git rebase cleanly", exc_info=True)
 
-    def sync_from_remote(self, *, allow_dirty: bool = False) -> bool:
+    def sync_from_remote(self, *, allow_dirty: bool = False, autocommit_dirty: bool = False) -> bool:
         """Fetch remote changes and rebase local commits on top of them."""
         if not self.enabled:
             return True
@@ -137,7 +155,17 @@ class GitService:
             repo = self._ensure_repo()
             self._require_remote(repo)
             self._assert_repo_writable(repo)
-            if not allow_dirty:
+            if autocommit_dirty:
+                dirty_paths = self._dirty_paths(repo)
+                if dirty_paths:
+                    logger.info(
+                        "Auto-committing %d existing repo change(s) before sync: %s",
+                        len(dirty_paths),
+                        ", ".join(dirty_paths[:10]),
+                    )
+                    self._stage_all_changes(repo)
+                    self._commit_staged_changes(repo, "Journal repo snapshot")
+            elif not allow_dirty:
                 self._ensure_clean_worktree(repo)
 
             tracking_ref = self._tracking_ref_name(repo)
@@ -166,23 +194,11 @@ class GitService:
             raise GitSyncError("Unexpected error during git sync from remote") from exc
 
     def prepare_for_write(self) -> None:
-        """Ensure repo is clean and up to date before modifying journal files."""
-        self.sync_from_remote()
+        """Capture existing repo changes, then sync before modifying journal files."""
+        self.sync_from_remote(autocommit_dirty=True)
 
-    def _stage_paths(
-        self, repo: Repo, file_paths: Path | Sequence[Path]
-    ) -> tuple[list[Path], list[str]]:
-        paths = [file_paths] if isinstance(file_paths, Path) else list(file_paths)
-        if not paths:
-            return [], []
-
-        rel_paths: list[str] = []
-        for fp in paths:
-            rel_paths.append(str(fp.resolve().relative_to(repo.working_tree_dir)))
-        return paths, rel_paths
-
-    def commit_and_push(self, file_paths: Path | Sequence[Path]) -> GitSyncResult:
-        """Stage changes, commit if needed, and push with one sync/retry on rejection."""
+    def commit_and_push(self, file_paths: Path | Sequence[Path] | None = None) -> GitSyncResult:
+        """Stage the whole repo, commit all changes, and push with one sync/retry on rejection."""
         if not self.enabled:
             return GitSyncResult(pushed=True)
 
@@ -190,23 +206,14 @@ class GitService:
             repo = self._ensure_repo()
             self._require_remote(repo)
             self._assert_repo_writable(repo)
-            paths, rel_paths = self._stage_paths(repo, file_paths)
-        except (NoSuchPathError, InvalidGitRepositoryError, ValueError) as exc:
-            raise GitSyncError("Cannot resolve journal file(s) inside repo") from exc
-
-        if not rel_paths:
-            return GitSyncResult(pushed=True)
+        except (NoSuchPathError, InvalidGitRepositoryError) as exc:
+            raise GitSyncError("Cannot access journal repository") from exc
 
         try:
-            repo.index.add(rel_paths)
-            has_staged_changes = repo.is_dirty(
-                index=True, working_tree=False, untracked_files=False
-            )
-            if not has_staged_changes:
+            self._stage_all_changes(repo)
+            if not self._commit_staged_changes(repo, "Journal entry"):
                 return GitSyncResult(pushed=True)
 
-            timestamp = datetime.now(self.timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
-            repo.index.commit(f"Journal entry: {timestamp}")
             tracking_ref = self._tracking_ref_name(repo)
 
             try:
@@ -216,7 +223,6 @@ class GitService:
                 logger.warning(
                     "Initial git push failed, retrying after sync (%s)",
                     _format_git_error(exc),
-                    extra={"files": [str(p) for p in paths]},
                 )
 
             try:
