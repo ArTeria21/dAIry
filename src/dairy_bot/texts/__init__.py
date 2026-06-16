@@ -1,4 +1,4 @@
-"""Shared message templates and localization helpers for bot responses."""
+"""Общие шаблоны сообщений и помощники локализации."""
 
 from dairy_bot.texts.messages import (  # noqa: F401
     DEFAULT_LANG,

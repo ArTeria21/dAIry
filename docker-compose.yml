@@ -8,16 +8,28 @@ services:
     environment:
       HOME: /tmp
       JOURNAL_DIR: /data
-      GOOGLE_CREDS_FILE: /app/gcp_creds.json
       GIT_AUTHOR_NAME: dairy-bot
       GIT_AUTHOR_EMAIL: dairy-bot@local
       GIT_COMMITTER_NAME: dairy-bot
       GIT_COMMITTER_EMAIL: dairy-bot@local
-      GIT_SSH_COMMAND: "ssh -i /tmp/ssh/github_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/tmp/ssh/known_hosts"
+      GIT_SSH_COMMAND: "ssh -i /tmp/runtime_ssh/github_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/tmp/runtime_ssh/known_hosts"
     volumes:
       - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/data
-      - ${HOME}/.ssh/github_ed25519:/tmp/ssh/github_ed25519:ro
+      - ${SSH_KEY_PATH:-${HOME}/.ssh/github_ed25519}:/tmp/ssh/github_ed25519:ro
       - ${HOME}/.ssh/known_hosts:/tmp/ssh/known_hosts:ro
-      - ./gcp_creds.json:/app/gcp_creds.json:ro
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        test -f /tmp/ssh/github_ed25519 || {
+          echo "SSH private key is not a file. Set SSH_KEY_PATH to your real private key file." >&2
+          exit 1
+        }
+        mkdir -p /tmp/runtime_ssh
+        cp /tmp/ssh/github_ed25519 /tmp/runtime_ssh/github_ed25519
+        cp /tmp/ssh/known_hosts /tmp/runtime_ssh/known_hosts
+        chmod 700 /tmp/runtime_ssh
+        chmod 600 /tmp/runtime_ssh/github_ed25519 /tmp/runtime_ssh/known_hosts
+        exec /app/.venv/bin/python src/bot.py
     init: true
     restart: unless-stopped

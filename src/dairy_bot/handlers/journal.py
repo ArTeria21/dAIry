@@ -42,12 +42,12 @@ LANG_CALLBACKS = {LANG_EN_CALLBACK, LANG_RU_CALLBACK}
 
 
 async def _safe_respond(action: str, op: Callable[[], Awaitable[object]]) -> None:
-    """Send a Telegram response but don't crash on transient network errors."""
+    """Отправить ответ в Telegram и не падать на временных сетевых ошибках."""
     try:
         await op()
     except TelegramNetworkError:
         logger.warning("Telegram request failed during %s", action, exc_info=True)
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - защитный контур
         logger.exception("Unexpected error during %s", action)
 
 
@@ -100,17 +100,30 @@ def _split_text_for_html(text: str, max_len: int) -> list[str]:
     return [chunk for chunk in chunks if chunk]
 
 
-def _get_journal_lock() -> asyncio.Lock:
+def get_journal_lock() -> asyncio.Lock:
     global _journal_lock
     if _journal_lock is None:
         _journal_lock = asyncio.Lock()
     return _journal_lock
 
 
+def _save_status_key(save_state: str) -> str:
+    if save_state == "empty":
+        return "nothing_to_save"
+    if save_state == "blocked":
+        return "repo_sync_blocked"
+    if save_state == "synced":
+        return "save_synced"
+    return "save_local_only"
+
+
 async def _save_entry_with_sync(
     content: str, settings: Settings, git_service: GitService
 ) -> str:
-    async with _get_journal_lock():
+    if not content.strip():
+        return "empty"
+
+    async with get_journal_lock():
         try:
             await asyncio.to_thread(git_service.prepare_for_write)
         except GitSyncError:
@@ -163,7 +176,7 @@ async def handle_today(
 ) -> None:
     lang = _user_lang(message.from_user.id if message.from_user else None)
 
-    async with _get_journal_lock():
+    async with get_journal_lock():
         await _sync_for_read(git_service, "/today")
         content = await read_daily_note_entries(
             settings.journal_dir, timezone=settings.timezone
@@ -228,7 +241,7 @@ async def handle_edit(
 ) -> None:
     lang = _user_lang(message.from_user.id if message.from_user else None)
     save_state = await _save_entry_with_sync(message.text, settings, git_service)
-    status_key = "repo_sync_blocked" if save_state == "blocked" else "save_synced" if save_state == "synced" else "save_local_only"
+    status_key = _save_status_key(save_state)
     await _safe_respond(
         "edit save confirmation", lambda: message.answer(messages.t(status_key, lang))
     )
@@ -241,7 +254,7 @@ async def handle_text(
 ) -> None:
     lang = _user_lang(message.from_user.id if message.from_user else None)
     save_state = await _save_entry_with_sync(message.text, settings, git_service)
-    status_key = "repo_sync_blocked" if save_state == "blocked" else "save_synced" if save_state == "synced" else "save_local_only"
+    status_key = _save_status_key(save_state)
     await _safe_respond(
         "text save confirmation", lambda: message.answer(messages.t(status_key, lang))
     )
@@ -257,7 +270,7 @@ async def handle_voice(message: Message, state: FSMContext, settings: Settings) 
 
     try:
         await message.bot.download(message.voice, destination=temp_oga_path)
-        # Convert OGG Opus to WAV for API compatibility
+        # Telegram присылает OGG Opus, а модель принимает WAV.
         process = await asyncio.create_subprocess_exec(
             "ffmpeg",
             "-y",
@@ -330,7 +343,7 @@ async def confirm_voice(
         return
 
     save_state = await _save_entry_with_sync(transcription, settings, git_service)
-    status_key = "repo_sync_blocked" if save_state == "blocked" else "save_synced" if save_state == "synced" else "save_local_only"
+    status_key = _save_status_key(save_state)
     await _safe_respond(
         "voice confirm callback answer",
         lambda: callback.answer(messages.t(status_key, lang)),

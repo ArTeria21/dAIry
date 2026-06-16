@@ -16,7 +16,7 @@ from dairy_bot.config import Settings
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Tag taxonomy — fixed English vocabulary. LLM must pick only from this set.
+# Таксономия тегов: фиксированный английский словарь для LLM.
 # ---------------------------------------------------------------------------
 
 TAG_TAXONOMY: dict[str, str] = {
@@ -54,7 +54,7 @@ TAG_TAXONOMY: dict[str, str] = {
 ALLOWED_TAG_SET = frozenset(TAG_TAXONOMY)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Константы
 # ---------------------------------------------------------------------------
 
 TOC_STATE_FILENAME = ".toc_index.json"
@@ -64,7 +64,7 @@ MAX_NOTE_CONTENT_FOR_LLM = 8000
 _MONTH_NAMES = {i: calendar.month_name[i] for i in range(1, 13)}
 
 # ---------------------------------------------------------------------------
-# Frontmatter helpers (lightweight duplicate to avoid coupling to storage.py)
+# Помощники frontmatter без жёсткой связки со storage.py
 # ---------------------------------------------------------------------------
 
 
@@ -94,7 +94,7 @@ def _strip_frontmatter_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Content detection
+# Определение содержательных заметок
 # ---------------------------------------------------------------------------
 
 
@@ -131,7 +131,7 @@ def _has_indexable_content(text: str, is_daily: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Hashing
+# Хеширование
 # ---------------------------------------------------------------------------
 
 
@@ -140,7 +140,7 @@ def _content_hash(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Note cleaning for LLM
+# Очистка заметки перед LLM
 # ---------------------------------------------------------------------------
 
 
@@ -163,7 +163,7 @@ def _clean_for_llm(text: str, is_daily: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
-# File discovery
+# Поиск файлов
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +192,7 @@ def _discover_files(
 
 
 # ---------------------------------------------------------------------------
-# State persistence
+# Хранение состояния индекса
 # ---------------------------------------------------------------------------
 
 
@@ -216,7 +216,7 @@ async def _save_state(journal_dir: Path, state: dict[str, Any]) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# LLM summarisation
+# LLM-обогащение
 # ---------------------------------------------------------------------------
 
 
@@ -244,6 +244,35 @@ def _build_user_prompt(cleaned_text: str, rel_path: str) -> str:
     return f"Note path: {rel_path}\n\nNote content:\n{cleaned_text}"
 
 
+def _build_response_format(max_tags: int) -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "journal_toc_entry",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["summary", "tags"],
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "A concise factual English summary.",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "maxItems": max_tags,
+                        "items": {
+                            "type": "string",
+                            "enum": sorted(ALLOWED_TAG_SET),
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
 def _parse_llm_json(raw: str) -> dict[str, Any]:
     text = raw.strip()
     if text.startswith("```"):
@@ -263,6 +292,7 @@ async def _summarize_note(
     completion = await client.chat.completions.create(
         model=model_name,
         temperature=0.2,
+        response_format=_build_response_format(max_tags),
         messages=[
             {"role": "system", "content": _build_system_prompt(max_tags)},
             {"role": "user", "content": _build_user_prompt(cleaned_text, rel_path)},
@@ -280,7 +310,7 @@ async def _summarize_note(
 
 
 # ---------------------------------------------------------------------------
-# TOC renderer
+# Рендеринг TOC
 # ---------------------------------------------------------------------------
 
 
@@ -301,7 +331,7 @@ def _render_toc(
     lines.append(f"> **Coverage:** {' + '.join(coverage_parts)}")
     lines.append("")
 
-    # --- Tag Vocabulary ---
+    # Словарь тегов
     lines.append("## Tag Vocabulary")
     lines.append("")
     lines.append("| Tag | Description |")
@@ -310,7 +340,7 @@ def _render_toc(
         lines.append(f"| {tag} | {TAG_TAXONOMY[tag]} |")
     lines.append("")
 
-    # --- Split entries ---
+    # Разделение daily и дополнительных заметок
     daily_entries: dict[str, dict[str, Any]] = {}
     extra_entries: dict[str, dict[str, Any]] = {}
     for rel_path, entry in state.items():
@@ -319,7 +349,7 @@ def _render_toc(
         else:
             extra_entries[rel_path] = entry
 
-    # --- Daily Notes ---
+    # Дневные заметки
     if daily_entries:
         lines.append("## Daily Notes")
         lines.append("")
@@ -345,7 +375,7 @@ def _render_toc(
                     _render_entry_line(lines, rel_path, entry, daily=True)
                 lines.append("")
 
-    # --- Additional Notes ---
+    # Дополнительные заметки
     if extra_entries:
         lines.append("## Additional Notes")
         lines.append("")
@@ -386,7 +416,7 @@ def _render_entry_line(
 
 
 # ---------------------------------------------------------------------------
-# Main reconcile
+# Основная сверка индекса
 # ---------------------------------------------------------------------------
 
 
@@ -395,13 +425,7 @@ async def reconcile_toc(
     settings: Settings,
     target_paths: list[Path] | None = None,
 ) -> list[Path]:
-    """Reconcile the TOC index.
-
-    Compares on-disk files with cached state, re-indexes changed files via LLM,
-    and regenerates ``table_of_contents.md``.
-
-    Returns paths of changed files (TOC + state) or an empty list when nothing changed.
-    """
+    """Сверить TOC index с файлами на диске и вернуть изменённые пути."""
     if not settings.toc_enabled:
         return []
 
@@ -417,7 +441,7 @@ async def reconcile_toc(
 
     state = await _load_state(journal_dir)
 
-    # Decide scope ---------------------------------------------------------
+    # Выбираем область проверки -------------------------------------------
     if target_paths is not None:
         paths_to_check: dict[str, Path] = {}
         for tp in target_paths:
@@ -430,7 +454,7 @@ async def reconcile_toc(
     else:
         paths_to_check = dict(all_rel)
 
-    # Detect changes -------------------------------------------------------
+    # Ищем изменения -------------------------------------------------------
     files_to_index: dict[str, Path] = {}
     files_to_remove: list[str] = []
     state_touched = False
@@ -478,7 +502,7 @@ async def reconcile_toc(
     for rel_path in files_to_remove:
         state.pop(rel_path, None)
 
-    # Call LLM for changed files -------------------------------------------
+    # Вызываем LLM для изменённых файлов -----------------------------------
     if files_to_index:
         client = AsyncOpenAI(
             base_url=settings.openrouter_base_url,
@@ -512,7 +536,7 @@ async def reconcile_toc(
             except Exception:
                 pass
 
-    # Render & persist -----------------------------------------------------
+    # Рендерим и сохраняем -------------------------------------------------
     toc_content = _render_toc(state, extra_dirs, toc_filename, str(settings.timezone))
     toc_path = journal_dir / toc_filename
     async with aiofiles.open(toc_path, "w", encoding="utf-8") as f:

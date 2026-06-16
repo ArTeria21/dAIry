@@ -1,2 +1,1 @@
-# Middleware package marker.
-
+# Маркер пакета middleware.

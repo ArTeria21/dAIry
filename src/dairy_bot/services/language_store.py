@@ -8,11 +8,11 @@ _user_langs: Dict[int, str] = {}
 
 
 def set_language(user_id: int, lang: str) -> None:
-    """Persist the user's language selection in memory."""
+    """Запомнить выбранный язык пользователя в памяти процесса."""
     lang_code = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
     _user_langs[user_id] = lang_code
 
 
 def get_language(user_id: int) -> str:
-    """Return the user's language or the default if none was set."""
+    """Вернуть язык пользователя или значение по умолчанию."""
     return _user_langs.get(user_id, DEFAULT_LANG)
