@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     openrouter_base_url: str = Field(
         default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
     )
-    # Индексация оглавления
+    # Table of contents indexing
     toc_enabled: bool = Field(default=False, alias="TOC_ENABLED")
     toc_filename: str = Field(default="table_of_contents.md", alias="TOC_FILENAME")
     toc_extra_include_dirs: str = Field(default="", alias="TOC_EXTRA_INCLUDE_DIRS")

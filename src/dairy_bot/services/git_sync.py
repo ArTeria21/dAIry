@@ -39,27 +39,27 @@ class GitSyncResult:
 
 
 class GitSyncError(RuntimeError):
-    """Базовая ошибка синхронизации дневника."""
+    """Base journal synchronization error."""
 
 
 class GitRepoDirtyError(GitSyncError):
-    """Репозиторий содержит локальные изменения, из-за которых sync небезопасен."""
+    """Repository has local changes that make synchronization unsafe."""
 
 
 class GitPermissionError(GitSyncError):
-    """Процесс не может писать в Git metadata репозитория."""
+    """The process cannot write repository Git metadata."""
 
 
 class GitConflictError(GitSyncError):
-    """Remote-изменения не удалось чисто применить через rebase."""
+    """Remote changes could not be applied cleanly through rebase."""
 
 
 class GitPushError(GitSyncError):
-    """Локальный commit не удалось отправить после повторной попытки."""
+    """The local commit could not be pushed after a retry."""
 
 
 class GitService:
-    """Git-процесс: sync перед записью, затем commit/rebase/push."""
+    """Git workflow: sync before write, then commit/rebase/push."""
 
     def __init__(
         self, journal_dir: Path, enabled: bool = True, timezone: ZoneInfo | None = None
@@ -148,7 +148,7 @@ class GitService:
             logger.warning("Failed to abort git rebase cleanly", exc_info=True)
 
     def sync_from_remote(self, *, allow_dirty: bool = False, autocommit_dirty: bool = False) -> bool:
-        """Забрать remote-изменения и переложить локальные commits поверх них."""
+        """Fetch remote changes and replay local commits on top of them."""
         if not self.enabled:
             return True
         try:
@@ -190,15 +190,15 @@ class GitService:
             raise GitSyncError(
                 f"Git sync from remote failed ({_format_git_error(exc)})"
             ) from exc
-        except Exception as exc:  # pragma: no cover - защитный контур
+        except Exception as exc:  # pragma: no cover - defensive boundary
             raise GitSyncError("Unexpected error during git sync from remote") from exc
 
     def prepare_for_write(self) -> None:
-        """Сохранить существующие изменения и синхронизироваться перед записью."""
+        """Save existing changes and synchronize before writing."""
         self.sync_from_remote(autocommit_dirty=True)
 
     def commit_and_push(self, file_paths: Path | Sequence[Path] | None = None) -> GitSyncResult:
-        """Добавить изменения в index, создать commit и отправить его в remote."""
+        """Add changes to the index, create a commit, and push it to remote."""
         if not self.enabled:
             return GitSyncResult(pushed=True)
 
@@ -243,5 +243,5 @@ class GitService:
             raise GitSyncError(
                 f"Git commit/push failed ({_format_git_error(exc)})"
             ) from exc
-        except Exception as exc:  # pragma: no cover - защитный контур
+        except Exception as exc:  # pragma: no cover - defensive boundary
             raise GitSyncError("Unexpected error during git commit/push") from exc

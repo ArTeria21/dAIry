@@ -1,6 +1,6 @@
 import asyncio
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -9,11 +9,35 @@ import aiofiles
 from dairy_bot.config import DEFAULT_TZ
 
 DATE_HEADER_RE = re.compile(r"^#\s+\d{4}-\d{2}-\d{2}\s*$")
+MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
 
 
 def _now(moment: datetime | None = None, timezone: ZoneInfo | None = None) -> datetime:
     tz = timezone or DEFAULT_TZ
     return (moment or datetime.now(tz)).astimezone(tz)
+
+
+def _target_datetime(
+    current: datetime, target_date: date | datetime | None, timezone: ZoneInfo
+) -> datetime:
+    if target_date is None:
+        return current
+    if isinstance(target_date, datetime):
+        return target_date.astimezone(timezone)
+    return datetime.combine(target_date, time.min, tzinfo=timezone)
 
 
 def daily_note_path(
@@ -84,6 +108,13 @@ def _build_nav_line(prev_label: str | None, next_label: str | None) -> str:
     if next_label:
         links.append(f"[[{next_label}|Next day]]")
     return " · ".join(links)
+
+
+def _entry_heading(current: datetime, target: datetime) -> str:
+    if current.date() == target.date():
+        return f"## {current:%H:%M}"
+    month_name = MONTH_NAMES[current.month - 1]
+    return f"## {month_name} {current.day} {current:%H:%M}"
 
 
 async def _read_text(path: Path) -> str:
@@ -216,22 +247,23 @@ async def append_entry(
     content: str,
     moment: datetime | None = None,
     timezone: ZoneInfo | None = None,
+    target_date: date | datetime | None = None,
 ) -> Path:
     normalized_content = content.strip()
     if not normalized_content:
         raise ValueError("Cannot append an empty journal entry")
 
-    current = _now(moment, timezone)
-    note_path = daily_note_path(journal_dir, current, timezone)
-    was_empty_day = not await note_has_content(journal_dir, current, timezone)
-    await _ensure_daily_template(journal_dir, note_path, current, timezone)
+    tz = timezone or DEFAULT_TZ
+    current = _now(moment, tz)
+    target = _target_datetime(current, target_date, tz)
+    note_path = daily_note_path(journal_dir, target, tz)
+    await _ensure_daily_template(journal_dir, note_path, target, tz)
 
-    payload = f"## {current:%H:%M}\n\n{normalized_content}\n\n"
+    payload = f"{_entry_heading(current, target)}\n\n{normalized_content}\n\n"
     async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
         await file.write(payload)
 
-    if was_empty_day:
-        await _refresh_neighbor_nav(journal_dir, current, timezone)
+    await _refresh_neighbor_nav(journal_dir, target, tz)
     return note_path
 
 
@@ -251,7 +283,7 @@ async def read_daily_note(
     moment: datetime | None = None,
     timezone: ZoneInfo | None = None,
 ) -> str:
-    """Вернуть полный текст дневной заметки или пустую строку, если файла нет."""
+    """Return the full daily note text, or an empty string when it is missing."""
     note_path = daily_note_path(journal_dir, moment, timezone)
     try:
         return await _read_text(note_path)
@@ -260,7 +292,7 @@ async def read_daily_note(
 
 
 def _strip_note_template(text: str) -> str:
-    """Убрать frontmatter, заголовок даты и навигацию из дневной заметки."""
+    """Remove frontmatter, date heading, and navigation from a daily note."""
     body = _strip_frontmatter(text)
     lines = body.splitlines()
     if not lines:
@@ -284,7 +316,7 @@ async def read_daily_note_entries(
     moment: datetime | None = None,
     timezone: ZoneInfo | None = None,
 ) -> str:
-    """Вернуть только записи дня без служебного шаблона."""
+    """Return only day entries without the service template."""
     content = await read_daily_note(journal_dir, moment=moment, timezone=timezone)
     if not content:
         return ""

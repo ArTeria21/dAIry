@@ -58,12 +58,12 @@ async def transcribe_audio(path: Path, settings: Settings) -> str:
                 }
             ],
         )
-    except Exception as exc:  # pragma: no cover - защитный контур
+    except Exception as exc:  # pragma: no cover - defensive boundary
         raise RuntimeError("Transcription failed") from exc
     finally:
         try:
             await client.close()
-        except Exception:  # pragma: no cover - очистка по возможности
+        except Exception:  # pragma: no cover - best-effort cleanup
             pass
 
     choice = completion.choices[0].message.content

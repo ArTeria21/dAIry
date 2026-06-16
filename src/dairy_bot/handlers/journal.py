@@ -1,7 +1,8 @@
 import asyncio
 import logging
+import re
 import tempfile
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from html import escape
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -39,15 +40,17 @@ CANCEL_CALLBACK = "voice_cancel"
 LANG_EN_CALLBACK = "lang_en"
 LANG_RU_CALLBACK = "lang_ru"
 LANG_CALLBACKS = {LANG_EN_CALLBACK, LANG_RU_CALLBACK}
+ENTRY_TARGET_DATE_KEY = "entry_target_date"
+DAY_COMMAND_RE = re.compile(r"^/day\s+(\d{2}-\d{2}-\d{4})\s*$")
 
 
 async def _safe_respond(action: str, op: Callable[[], Awaitable[object]]) -> None:
-    """Отправить ответ в Telegram и не падать на временных сетевых ошибках."""
+    """Send a Telegram response without failing on temporary network errors."""
     try:
         await op()
     except TelegramNetworkError:
         logger.warning("Telegram request failed during %s", action, exc_info=True)
-    except Exception:  # pragma: no cover - защитный контур
+    except Exception:  # pragma: no cover - defensive boundary
         logger.exception("Unexpected error during %s", action)
 
 
@@ -117,8 +120,47 @@ def _save_status_key(save_state: str) -> str:
     return "save_local_only"
 
 
+async def _set_entry_target_date(state: FSMContext, target_date: date) -> None:
+    await state.update_data(**{ENTRY_TARGET_DATE_KEY: target_date.isoformat()})
+
+
+async def _get_entry_target_date(state: FSMContext) -> date | None:
+    data = await state.get_data()
+    value = data.get(ENTRY_TARGET_DATE_KEY)
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+async def _clear_entry_target_date(state: FSMContext) -> None:
+    await state.update_data(**{ENTRY_TARGET_DATE_KEY: None})
+
+
+def _parse_day_command(text: str | None) -> date | None:
+    if not text:
+        return None
+    match = DAY_COMMAND_RE.match(text)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%d-%m-%Y").date()
+    except ValueError:
+        return None
+
+
+def _format_display_date(value: date) -> str:
+    return value.strftime("%d-%m-%Y")
+
+
 async def _save_entry_with_sync(
-    content: str, settings: Settings, git_service: GitService
+    content: str,
+    settings: Settings,
+    git_service: GitService,
+    target_date: date | None = None,
+    moment: datetime | None = None,
 ) -> str:
     if not content.strip():
         return "empty"
@@ -130,7 +172,11 @@ async def _save_entry_with_sync(
             logger.warning("Git sync blocked journal write", exc_info=True)
             return "blocked"
         note_path = await append_entry(
-            settings.journal_dir, content, timezone=settings.timezone
+            settings.journal_dir,
+            content,
+            moment=moment,
+            timezone=settings.timezone,
+            target_date=target_date,
         )
         toc_paths = await reconcile_toc(
             settings.journal_dir, settings, target_paths=[note_path]
@@ -187,7 +233,7 @@ async def handle_today(
         )
         return
 
-    date_label = datetime.now(settings.timezone).strftime("%Y-%m-%d")
+    date_label = _format_display_date(datetime.now(settings.timezone).date())
     reply_text = messages.format_today_note(date_label, content, lang)
     if len(reply_text) <= MAX_TG_MESSAGE_LEN:
         await _safe_respond("today note", lambda: message.answer(reply_text))
@@ -203,6 +249,57 @@ async def handle_today(
             f"today note chunk {index}",
             lambda chunk=escaped_chunk: message.answer(chunk),
         )
+
+
+@router.message(Command("yesterday"))
+async def handle_yesterday(
+    message: Message, state: FSMContext, settings: Settings
+) -> None:
+    lang = _user_lang(message.from_user.id if message.from_user else None)
+    target_date = datetime.now(settings.timezone).date() - timedelta(days=1)
+    await _set_entry_target_date(state, target_date)
+    await _safe_respond(
+        "yesterday target set",
+        lambda: message.answer(
+            messages.format_date_override_set(_format_display_date(target_date), lang)
+        ),
+    )
+
+
+@router.message(Command("day"))
+async def handle_day(message: Message, state: FSMContext, settings: Settings) -> None:
+    lang = _user_lang(message.from_user.id if message.from_user else None)
+    target_date = _parse_day_command(message.text)
+    if target_date is None:
+        await _safe_respond(
+            "day target invalid",
+            lambda: message.answer(messages.t("date_override_invalid", lang)),
+        )
+        return
+    if target_date > datetime.now(settings.timezone).date():
+        await _safe_respond(
+            "day target future",
+            lambda: message.answer(messages.t("date_override_future", lang)),
+        )
+        return
+
+    await _set_entry_target_date(state, target_date)
+    await _safe_respond(
+        "day target set",
+        lambda: message.answer(
+            messages.format_date_override_set(_format_display_date(target_date), lang)
+        ),
+    )
+
+
+@router.message(Command("back"))
+async def handle_back(message: Message, state: FSMContext) -> None:
+    lang = _user_lang(message.from_user.id if message.from_user else None)
+    await _clear_entry_target_date(state)
+    await _safe_respond(
+        "date target cancelled",
+        lambda: message.answer(messages.t("date_override_cancelled", lang)),
+    )
 
 
 @router.callback_query(F.data.in_(LANG_CALLBACKS))
@@ -240,7 +337,10 @@ async def handle_edit(
     message: Message, state: FSMContext, settings: Settings, git_service: GitService
 ) -> None:
     lang = _user_lang(message.from_user.id if message.from_user else None)
-    save_state = await _save_entry_with_sync(message.text, settings, git_service)
+    target_date = await _get_entry_target_date(state)
+    save_state = await _save_entry_with_sync(
+        message.text, settings, git_service, target_date=target_date
+    )
     status_key = _save_status_key(save_state)
     await _safe_respond(
         "edit save confirmation", lambda: message.answer(messages.t(status_key, lang))
@@ -253,7 +353,10 @@ async def handle_text(
     message: Message, state: FSMContext, settings: Settings, git_service: GitService
 ) -> None:
     lang = _user_lang(message.from_user.id if message.from_user else None)
-    save_state = await _save_entry_with_sync(message.text, settings, git_service)
+    target_date = await _get_entry_target_date(state)
+    save_state = await _save_entry_with_sync(
+        message.text, settings, git_service, target_date=target_date
+    )
     status_key = _save_status_key(save_state)
     await _safe_respond(
         "text save confirmation", lambda: message.answer(messages.t(status_key, lang))
@@ -270,7 +373,7 @@ async def handle_voice(message: Message, state: FSMContext, settings: Settings) 
 
     try:
         await message.bot.download(message.voice, destination=temp_oga_path)
-        # Telegram присылает OGG Opus, а модель принимает WAV.
+        # Telegram sends OGG Opus, while the model accepts WAV.
         process = await asyncio.create_subprocess_exec(
             "ffmpeg",
             "-y",
@@ -342,7 +445,10 @@ async def confirm_voice(
         await state.clear()
         return
 
-    save_state = await _save_entry_with_sync(transcription, settings, git_service)
+    target_date = await _get_entry_target_date(state)
+    save_state = await _save_entry_with_sync(
+        transcription, settings, git_service, target_date=target_date
+    )
     status_key = _save_status_key(save_state)
     await _safe_respond(
         "voice confirm callback answer",

@@ -83,6 +83,22 @@ MESSAGES = {
         LANG_EN: "📓 Today's note ({date})",
         LANG_RU: "📓 Заметки за сегодня ({date})",
     },
+    "date_override_set": {
+        LANG_EN: "Next entry will be saved to {date}. If the note does not exist, I will create it.",
+        LANG_RU: "Следующая запись сохранится в заметку за {date}. Если заметки ещё нет, я создам её.",
+    },
+    "date_override_cancelled": {
+        LANG_EN: "Date override cancelled. The next entry will be saved to today.",
+        LANG_RU: "Выбор другой даты отменён. Следующая запись сохранится в сегодняшний день.",
+    },
+    "date_override_invalid": {
+        LANG_EN: "Use /day dd-mm-yyyy, for example /day 13-06-2026.",
+        LANG_RU: "Используйте /day dd-mm-yyyy, например /day 13-06-2026.",
+    },
+    "date_override_future": {
+        LANG_EN: "Future dates are not available. Choose today or a past date.",
+        LANG_RU: "Нельзя выбрать дату в будущем. Выберите сегодняшний или прошедший день.",
+    },
 }
 
 
@@ -99,7 +115,7 @@ def t(key: str, lang: str | None = None) -> str:
 
 
 def format_transcription_preview(transcription: str, lang: str | None = None) -> str:
-    """Показать безопасный HTML-предпросмотр расшифровки."""
+    """Show a safe HTML preview of the transcription."""
     safe_text = escape(transcription.strip()) or "…"
     title = t("voice_preview_title", lang)
     question = t("voice_preview_question", lang)
@@ -107,9 +123,13 @@ def format_transcription_preview(transcription: str, lang: str | None = None) ->
 
 
 def format_today_note(date_label: str, content: str, lang: str | None = None) -> str:
-    """Показать записи за сегодня с локализованным заголовком."""
+    """Show today's entries with a localized heading."""
     title = t("today_header", lang).format(date=escape(date_label))
     safe_body = escape(content.strip())
     if not safe_body:
         return title
     return f"{title}\n\n{safe_body}"
+
+
+def format_date_override_set(date_label: str, lang: str | None = None) -> str:
+    return t("date_override_set", lang).format(date=escape(date_label))

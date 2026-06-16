@@ -1,1 +1,1 @@
-# Маркер пакета dairy_bot.
+# dairy_bot package marker.

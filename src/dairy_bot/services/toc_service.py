@@ -16,7 +16,7 @@ from dairy_bot.config import Settings
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Таксономия тегов: фиксированный английский словарь для LLM.
+# Tag taxonomy: a fixed English vocabulary for the LLM.
 # ---------------------------------------------------------------------------
 
 TAG_TAXONOMY: dict[str, str] = {
@@ -54,7 +54,7 @@ TAG_TAXONOMY: dict[str, str] = {
 ALLOWED_TAG_SET = frozenset(TAG_TAXONOMY)
 
 # ---------------------------------------------------------------------------
-# Константы
+# Constants
 # ---------------------------------------------------------------------------
 
 TOC_STATE_FILENAME = ".toc_index.json"
@@ -64,7 +64,7 @@ MAX_NOTE_CONTENT_FOR_LLM = 8000
 _MONTH_NAMES = {i: calendar.month_name[i] for i in range(1, 13)}
 
 # ---------------------------------------------------------------------------
-# Помощники frontmatter без жёсткой связки со storage.py
+# Frontmatter helpers without a hard dependency on storage.py
 # ---------------------------------------------------------------------------
 
 
@@ -94,7 +94,7 @@ def _strip_frontmatter_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Определение содержательных заметок
+# Indexable content detection
 # ---------------------------------------------------------------------------
 
 
@@ -131,7 +131,7 @@ def _has_indexable_content(text: str, is_daily: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Хеширование
+# Hashing
 # ---------------------------------------------------------------------------
 
 
@@ -140,7 +140,7 @@ def _content_hash(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Очистка заметки перед LLM
+# Note cleanup before LLM processing
 # ---------------------------------------------------------------------------
 
 
@@ -163,7 +163,7 @@ def _clean_for_llm(text: str, is_daily: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Поиск файлов
+# File discovery
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +192,7 @@ def _discover_files(
 
 
 # ---------------------------------------------------------------------------
-# Хранение состояния индекса
+# Index state storage
 # ---------------------------------------------------------------------------
 
 
@@ -216,7 +216,7 @@ async def _save_state(journal_dir: Path, state: dict[str, Any]) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# LLM-обогащение
+# LLM enrichment
 # ---------------------------------------------------------------------------
 
 
@@ -310,7 +310,7 @@ async def _summarize_note(
 
 
 # ---------------------------------------------------------------------------
-# Рендеринг TOC
+# TOC rendering
 # ---------------------------------------------------------------------------
 
 
@@ -331,7 +331,7 @@ def _render_toc(
     lines.append(f"> **Coverage:** {' + '.join(coverage_parts)}")
     lines.append("")
 
-    # Словарь тегов
+    # Tag vocabulary
     lines.append("## Tag Vocabulary")
     lines.append("")
     lines.append("| Tag | Description |")
@@ -340,7 +340,7 @@ def _render_toc(
         lines.append(f"| {tag} | {TAG_TAXONOMY[tag]} |")
     lines.append("")
 
-    # Разделение daily и дополнительных заметок
+    # Split daily and additional notes
     daily_entries: dict[str, dict[str, Any]] = {}
     extra_entries: dict[str, dict[str, Any]] = {}
     for rel_path, entry in state.items():
@@ -349,7 +349,7 @@ def _render_toc(
         else:
             extra_entries[rel_path] = entry
 
-    # Дневные заметки
+        # Daily notes
     if daily_entries:
         lines.append("## Daily Notes")
         lines.append("")
@@ -375,7 +375,7 @@ def _render_toc(
                     _render_entry_line(lines, rel_path, entry, daily=True)
                 lines.append("")
 
-    # Дополнительные заметки
+        # Additional notes
     if extra_entries:
         lines.append("## Additional Notes")
         lines.append("")
@@ -416,7 +416,7 @@ def _render_entry_line(
 
 
 # ---------------------------------------------------------------------------
-# Основная сверка индекса
+# Main index reconciliation
 # ---------------------------------------------------------------------------
 
 
@@ -425,7 +425,7 @@ async def reconcile_toc(
     settings: Settings,
     target_paths: list[Path] | None = None,
 ) -> list[Path]:
-    """Сверить TOC index с файлами на диске и вернуть изменённые пути."""
+    """Reconcile the TOC index with files on disk and return changed paths."""
     if not settings.toc_enabled:
         return []
 
@@ -441,7 +441,7 @@ async def reconcile_toc(
 
     state = await _load_state(journal_dir)
 
-    # Выбираем область проверки -------------------------------------------
+    # Select the check scope -----------------------------------------------
     if target_paths is not None:
         paths_to_check: dict[str, Path] = {}
         for tp in target_paths:
@@ -454,7 +454,7 @@ async def reconcile_toc(
     else:
         paths_to_check = dict(all_rel)
 
-    # Ищем изменения -------------------------------------------------------
+    # Detect changes -------------------------------------------------------
     files_to_index: dict[str, Path] = {}
     files_to_remove: list[str] = []
     state_touched = False
@@ -502,7 +502,7 @@ async def reconcile_toc(
     for rel_path in files_to_remove:
         state.pop(rel_path, None)
 
-    # Вызываем LLM для изменённых файлов -----------------------------------
+    # Call the LLM for changed files ---------------------------------------
     if files_to_index:
         client = AsyncOpenAI(
             base_url=settings.openrouter_base_url,
@@ -536,7 +536,7 @@ async def reconcile_toc(
             except Exception:
                 pass
 
-    # Рендерим и сохраняем -------------------------------------------------
+    # Render and save ------------------------------------------------------
     toc_content = _render_toc(state, extra_dirs, toc_filename, str(settings.timezone))
     toc_path = journal_dir / toc_filename
     async with aiofiles.open(toc_path, "w", encoding="utf-8") as f:

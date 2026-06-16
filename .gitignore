@@ -6,6 +6,8 @@ dist/
 wheels/
 *.egg-info
 AGENTS.md
+task.md
+.pytest_cache
 
 # Virtual environments
 .venv
@@ -16,3 +18,4 @@ gcp_creds.json
 
 # Test journal
 journal/
+

@@ -1,1 +1,1 @@
-# Маркер пакета сервисов.
+# Services package marker.
