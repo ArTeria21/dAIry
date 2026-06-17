@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
@@ -7,8 +8,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_TZ_NAME = "Europe/Vienna"
 DEFAULT_TZ = ZoneInfo(DEFAULT_TZ_NAME)
+GenerativeLanguage = Literal["RU", "EN"]
+LANGUAGE_DISPLAY_NAMES: dict[str, str] = {
+    "EN": "English",
+    "RU": "Russian",
+}
 
 logger = logging.getLogger(__name__)
+
+
+def language_display_name(language: str) -> str:
+    return LANGUAGE_DISPLAY_NAMES.get(language, LANGUAGE_DISPLAY_NAMES["EN"])
 
 
 class Settings(BaseSettings):
@@ -31,6 +41,7 @@ class Settings(BaseSettings):
         alias="TIMEZONE",
         validation_alias=AliasChoices("TIMEZONE", "PREFERRED_TIMEZONE"),
     )
+    language: GenerativeLanguage = Field(default="EN", alias="LANGUAGE")
     openrouter_base_url: str = Field(
         default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
     )

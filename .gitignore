@@ -7,6 +7,7 @@ wheels/
 *.egg-info
 AGENTS.md
 task.md
+design.md
 .pytest_cache
 
 # Virtual environments
@@ -20,4 +21,4 @@ gcp_creds.json
 journal/
 
 # Local enrichment cache
-data/
+*.sqlite3

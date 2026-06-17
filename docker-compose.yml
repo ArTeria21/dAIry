@@ -34,3 +34,47 @@ services:
         exec /app/.venv/bin/python src/bot.py
     init: true
     restart: unless-stopped
+
+  layer3-backend:
+    build:
+      context: ./web/backend
+    image: dairy-layer3-backend:latest
+    env_file:
+      - .env
+    environment:
+      ENRICHMENT_DB_PATH: /bot-data/enrichment.sqlite3
+      VAULT_DIR: /vault
+      ANALYSIS_CACHE_PATH: /app/cache/analysis_cache.sqlite3
+      WEB_COOKIE_SECURE: ${WEB_COOKIE_SECURE:-true}
+      WEB_LOGIN_RATE_LIMIT_ATTEMPTS: ${WEB_LOGIN_RATE_LIMIT_ATTEMPTS:-5}
+      WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60}
+    volumes:
+      - ./data:/bot-data:ro
+      - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/vault:ro
+      - layer3-analysis-cache:/app/cache
+    networks:
+      - layer3
+    expose:
+      - "8000"
+    init: true
+    restart: unless-stopped
+
+  layer3-frontend:
+    build:
+      context: ./web/frontend
+    image: dairy-layer3-frontend:latest
+    depends_on:
+      - layer3-backend
+    ports:
+      - "${LAYER3_FRONTEND_BIND:-127.0.0.1}:${LAYER3_FRONTEND_PORT:-18080}:80"
+    networks:
+      - layer3
+    init: true
+    restart: unless-stopped
+
+volumes:
+  layer3-analysis-cache:
+
+networks:
+  layer3:
+    name: dairy-layer3

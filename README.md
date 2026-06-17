@@ -113,6 +113,7 @@ SSH_KEY_PATH=/absolute/path/to/private/ssh/key
 
 # Runtime
 TIMEZONE=Europe/Vienna
+LANGUAGE=EN
 
 # TOC
 TOC_ENABLED=true
@@ -126,6 +127,16 @@ ENRICHMENT_ENABLED=true
 ENRICHMENT_MODEL_NAME=openai/gpt-4.1-mini
 EMBEDDING_MODEL_NAME=openai/text-embedding-3-small
 ENRICHMENT_DB_PATH=data/enrichment.sqlite3
+
+# Layer 3 web analytics
+LAYER3_FRONTEND_BIND=127.0.0.1
+LAYER3_FRONTEND_PORT=18080
+WEB_USERNAME=artem
+WEB_PASSWORD_ARGON2='$argon2id$v=19$m=65536,t=3,p=4$replace-with-generated-hash'
+WEB_SESSION_SECRET=replace-with-long-random-secret
+WEB_COOKIE_SECURE=true
+WEB_LOGIN_RATE_LIMIT_ATTEMPTS=5
+WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS=60
 ```
 
 `JOURNAL_DIR` — путь внутри приложения. Для Docker оставляйте `/data`.
@@ -137,6 +148,8 @@ ENRICHMENT_DB_PATH=data/enrichment.sqlite3
 ```bash
 SSH_KEY_PATH=/Users/artem/.ssh/id_ed25519
 ```
+
+`LANGUAGE` задаёт язык генеративных LLM-полей: `EN` или `RU`. Настройка влияет на prose-поля вроде note-level `gist`/`mood_evidence`, day-level `summary`/evidence и TOC `summary`; enum-значения `mood`, `topics`, `key_topics` и TOC tags остаются английскими.
 
 `TOC_MODEL_NAME` используется только для TOC enrichment: модель делает короткое summary и выбирает теги для `table_of_contents.md`.
 
@@ -154,6 +167,55 @@ ENRICHMENT_ENABLED=false
 GIT_ENABLED=false
 ```
 
+## Layer 3 web analytics
+
+Layer 3 adds two containers:
+
+- `layer3-backend` — FastAPI API, auth, read-only access to `data/enrichment.sqlite3` and the vault, plus its own writable `layer3-analysis-cache` Docker volume.
+- `layer3-frontend` — nginx serving the Vite SPA and proxying `/api/*` to the backend on the private Docker network.
+
+The backend mounts bot outputs read-only:
+
+```yaml
+./data:/bot-data:ro
+${HOST_JOURNAL_DIR}:/vault:ro
+```
+
+It overrides paths inside the container:
+
+```bash
+ENRICHMENT_DB_PATH=/bot-data/enrichment.sqlite3
+VAULT_DIR=/vault
+ANALYSIS_CACHE_PATH=/app/cache/analysis_cache.sqlite3
+```
+
+Before deployment, set web credentials in `.env`. Generate an argon2 hash with:
+
+```bash
+uv run python -c "from argon2 import PasswordHasher; import getpass; print(PasswordHasher().hash(getpass.getpass('WEB_PASSWORD: ')))"
+```
+
+Put the hash in `.env` in single quotes, because argon2 hashes contain `$` characters:
+
+```bash
+WEB_PASSWORD_ARGON2='$argon2id$v=19$m=65536,t=3,p=4$...'
+```
+
+Generate a session secret with:
+
+```bash
+openssl rand -hex 32
+```
+
+The compose file binds the frontend to localhost by default:
+
+```bash
+LAYER3_FRONTEND_BIND=127.0.0.1
+LAYER3_FRONTEND_PORT=18080
+```
+
+Point the existing HTTPS reverse proxy at `http://127.0.0.1:18080`. Keep `WEB_COOKIE_SECURE=true` in production so the auth cookie is `Secure` behind TLS. For local HTTP-only testing, temporarily set `WEB_COOKIE_SECURE=false`.
+
 ## Запуск через Docker
 
 1. Создайте `.env` из `.env.example` или примера выше.
@@ -167,9 +229,18 @@ docker compose up -d --build
 docker compose logs -f dairy-bot
 ```
 
+Для запуска Layer 3 вместе с ботом:
+
+```bash
+docker compose up -d --build dairy-bot layer3-backend layer3-frontend
+docker compose logs -f layer3-backend layer3-frontend
+```
+
 Compose монтирует `SSH_KEY_PATH` в контейнер, копирует ключ во временную директорию, выставляет права `0600` и запускает бот через `/app/.venv/bin/python`. Это важно: системный `python` внутри контейнера не содержит зависимости проекта.
 
 SQLite cache enrichment слоя монтируется из локальной папки проекта `./data` в контейнерный путь `/app/data`. При `ENRICHMENT_DB_PATH=data/enrichment.sqlite3` файл будет виден на хосте как `data/enrichment.sqlite3`.
+
+Layer 3 читает этот же файл как `/bot-data/enrichment.sqlite3` в режиме read-only и не пишет в bot DB. Проекция, кластеры и labels сохраняются только в Docker volume `layer3-analysis-cache`.
 
 Для Git over SSH также нужен `~/.ssh/known_hosts`; он монтируется автоматически.
 

@@ -7,21 +7,27 @@ from typing import Any
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from dairy_bot.config import Settings
+from dairy_bot.config import Settings, language_display_name
 from dairy_bot.services.enrichment_schemas import DayEnrichment, NoteEnrichment, Topic
 
 
-NOTE_SYSTEM_PROMPT = (
-    "You enrich one personal journal note. Follow the schema exactly. "
-    "Write gist and evidence in English. Select topics only from the schema enum. "
-    "Do not infer facts beyond the note text."
-)
+def _note_system_prompt(language: str) -> str:
+    output_language = language_display_name(language)
+    return (
+        "You enrich one personal journal note. Follow the schema exactly. "
+        f"Write gist and mood_evidence in {output_language}. "
+        "Select topics only from the schema enum. "
+        "Do not infer facts beyond the note text."
+    )
 
-DAY_SYSTEM_PROMPT = (
-    "You enrich one whole day of a personal journal. Follow the schema exactly. "
-    "Sparse facts must be null unless explicitly mentioned in the day's notes. "
-    "Write the summary and evidence in English."
-)
+
+def _day_system_prompt(language: str) -> str:
+    output_language = language_display_name(language)
+    return (
+        "You enrich one whole day of a personal journal. Follow the schema exactly. "
+        "Sparse facts must be null unless explicitly mentioned in the day's notes. "
+        f"Write summary and all evidence fields in {output_language}."
+    )
 
 
 class OpenRouterEnrichmentClient:
@@ -39,7 +45,7 @@ class OpenRouterEnrichmentClient:
             model=self.settings.enrichment_model_name,
             schema_model=NoteEnrichment,
             schema_name="note_enrichment",
-            system_prompt=NOTE_SYSTEM_PROMPT,
+            system_prompt=_note_system_prompt(getattr(self.settings, "language", "EN")),
             user_prompt=f"Journal note:\n{text}",
         )
         return NoteEnrichment.model_validate(raw)
@@ -49,7 +55,7 @@ class OpenRouterEnrichmentClient:
             model=self.settings.enrichment_model_name,
             schema_model=DayEnrichment,
             schema_name="day_enrichment",
-            system_prompt=DAY_SYSTEM_PROMPT,
+            system_prompt=_day_system_prompt(getattr(self.settings, "language", "EN")),
             user_prompt=f"Daily journal note with note-level labels:\n{text}",
         )
         return DayEnrichment.model_validate(raw)

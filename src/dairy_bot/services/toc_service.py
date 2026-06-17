@@ -11,7 +11,7 @@ import aiofiles
 import yaml
 from openai import AsyncOpenAI
 
-from dairy_bot.config import Settings
+from dairy_bot.config import Settings, language_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -226,15 +226,18 @@ async def _save_state(journal_dir: Path, state: dict[str, Any]) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _build_system_prompt(max_tags: int) -> str:
+def _build_system_prompt(max_tags: int, language: str = "EN") -> str:
+    output_language = language_display_name(language)
     tag_list = "\n".join(
         f"- {tag}: {desc}" for tag, desc in sorted(TAG_TAXONOMY.items())
     )
     return (
         "You are an indexer for a personal journal vault. "
-        "Produce a concise English summary and select relevant tags for a note.\n\n"
+        f"Produce a concise {output_language} summary and select relevant tags "
+        "for a note.\n\n"
         "The journal may be written in Russian, English, German, or a mix. "
-        "Always write the summary in English regardless of source language.\n\n"
+        f"Always write the summary in {output_language} regardless of source "
+        "language.\n\n"
         "RULES:\n"
         "- summary: 1-2 sentences, third-person, factual. "
         "Capture the main topics and themes. No speculation.\n"
@@ -250,7 +253,8 @@ def _build_user_prompt(cleaned_text: str, rel_path: str) -> str:
     return f"Note path: {rel_path}\n\nNote content:\n{cleaned_text}"
 
 
-def _build_response_format(max_tags: int) -> dict[str, Any]:
+def _build_response_format(max_tags: int, language: str = "EN") -> dict[str, Any]:
+    output_language = language_display_name(language)
     return {
         "type": "json_schema",
         "json_schema": {
@@ -263,7 +267,9 @@ def _build_response_format(max_tags: int) -> dict[str, Any]:
                 "properties": {
                     "summary": {
                         "type": "string",
-                        "description": "A concise factual English summary.",
+                        "description": (
+                            f"A concise factual {output_language} summary."
+                        ),
                     },
                     "tags": {
                         "type": "array",
@@ -303,10 +309,11 @@ async def _summarize_note(
     rel_path: str,
     model_name: str,
     max_tags: int,
+    language: str = "EN",
 ) -> dict[str, Any]:
     last_error: TocLLMResponseError | None = None
     for attempt in range(TOC_SUMMARY_ATTEMPTS):
-        system_prompt = _build_system_prompt(max_tags)
+        system_prompt = _build_system_prompt(max_tags, language)
         if attempt > 0:
             system_prompt += (
                 "\n\nYour previous response could not be parsed as JSON. "
@@ -316,7 +323,7 @@ async def _summarize_note(
             model=model_name,
             temperature=0.2,
             max_tokens=TOC_SUMMARY_MAX_TOKENS,
-            response_format=_build_response_format(max_tags),
+            response_format=_build_response_format(max_tags, language),
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": _build_user_prompt(cleaned_text, rel_path)},
@@ -475,6 +482,7 @@ async def reconcile_toc(
     extra_dirs = settings.toc_extra_dirs
     model_name = settings.toc_model
     max_tags = settings.toc_max_tags
+    language = getattr(settings, "language", "EN")
 
     all_files = _discover_files(journal_dir, extra_dirs, toc_filename)
     all_rel: dict[str, Path] = {
@@ -561,7 +569,7 @@ async def reconcile_toc(
                         state.pop(rel_path, None)
                         continue
                     result = await _summarize_note(
-                        client, cleaned, rel_path, model_name, max_tags
+                        client, cleaned, rel_path, model_name, max_tags, language
                     )
                     state[rel_path] = {
                         "content_hash": _content_hash(content),
