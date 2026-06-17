@@ -12,6 +12,7 @@ RUN groupadd --gid 1000 dairybot \
     && useradd --uid 1000 --gid 1000 --home-dir /tmp --no-create-home --shell /bin/sh dairybot
 
 WORKDIR /app
+RUN mkdir -p /app/data && chown -R dairybot:dairybot /app/data
 
 RUN pip install --no-cache-dir uv
 

@@ -2,7 +2,7 @@
 
 `dAIry` — приватный Telegram-бот для быстрого захвата дневниковых заметок в Obsidian/vault Git-репозиторий.
 
-Текущая версия — это **capture-only** слой. Бот не ведёт опросы, не задаёт Deep Questions и не пишет метрики в Google Sheets. Он делает одну вещь: принимает текст или голос, сохраняет запись в Markdown, обновляет TOC и синхронизирует vault через Git.
+Текущая версия — это **capture-first** слой. Бот не ведёт опросы, не задаёт Deep Questions и не пишет метрики в Google Sheets. Он принимает текст или голос, сохраняет запись в Markdown, может обогатить заметку LLM-тегами, обновляет TOC и синхронизирует vault через Git.
 
 По умолчанию каждая запись попадает в заметку сегодняшнего дня. Если нужно дописать прошлый день постфактум, можно один раз выбрать целевую дату командой `/yesterday` или `/day dd-mm-yyyy`. Такой выбор действует только на следующее текстовое сообщение или подтверждённую голосовую заметку, после чего бот снова пишет в сегодняшний день.
 
@@ -17,6 +17,7 @@
 - В дневной заметке сохраняются ссылки на ближайший предыдущий и следующий существующий день с записями.
 - Git sync включается через `GIT_ENABLED=true`: бот подтягивает remote перед записью, затем коммитит и пушит изменения.
 - TOC слой включается через `TOC_ENABLED=true`: бот поддерживает `table_of_contents.md` и `.toc_index.json`, включая изменения, добавленные в прошлые дни.
+- Enrichment слой включается через `ENRICHMENT_ENABLED=true`: сегодняшние новые записи получают note-level mood/topics сразу после сохранения, а прошлые дни и ручные правки обрабатываются тихим watchdog-проходом вместе с TOC.
 - Доступ ограничен одним Telegram-пользователем через `ALLOWED_USER_ID`.
 
 ## Формат заметок
@@ -35,6 +36,17 @@ type: daily
 
 Текст записи
 ```
+
+Когда включён note-level enrichment, у новых сегодняшних записей под текстом появляется компактная Dataview-строка:
+
+```markdown
+## 14:32 — text
+
+Сегодня было ужасное занятие по немецкому, преподавательница опять меня перебивала.
+mood:: anger · topics:: learning, identity
+```
+
+Для прошлых дней эта строка не добавляется сразу при post-factum сохранении через `/day` или `/yesterday`. Такие изменения подхватываются тихим watchdog-проходом раз в `TOC_SCAN_INTERVAL_MINUTES`, чтобы не спамить LLM-запросами во время ручного восстановления старых дней.
 
 Если предыдущего или следующего существующего дня нет, соответствующая ссылка пропускается. Старые заметки не мигрируются массово: бот просто перестаёт создавать старые поля метрик и служебные блоки.
 
@@ -59,8 +71,19 @@ type: daily
 | `/yesterday` | Сохранить следующее текстовое сообщение или подтверждённую голосовую заметку во вчерашний день |
 | `/day dd-mm-yyyy` | Сохранить следующую запись в указанную дневную заметку, например `/day 13-06-2026` |
 | `/back` | Отменить выбранную дату из `/yesterday` или `/day` |
+| `/enrich` | Тихо пересчитать day-level enrichment для сегодняшней заметки |
 
 Любое обычное текстовое сообщение считается новой записью. Голосовое сообщение сначала проходит транскрибацию и подтверждение.
+
+Если `ENRICHMENT_ENABLED=true` и запись сохраняется в сегодняшний день, бот отвечает одним статусным сообщением и редактирует его по мере прогресса:
+
+```text
+✅ Note written to file
+✅ LLM processed note. Mood: calm (0.77), topics: reflection, productivity
+✅ Synced with git
+```
+
+Статусное сообщение относится только к note-level enrichment. Day-level enrichment работает тихо, как TOC: по команде `/enrich`, в watchdog-проходе или в ночном проходе около 03:00.
 
 `/yesterday` и `/day` не переключают бота навсегда. Они ставят одноразовую цель: следующая запись попадёт в выбранную дневную заметку, а запись после неё снова попадёт в сегодняшний день. Если целевой заметки ещё нет, бот создаст её с обычным frontmatter, заголовком дня и навигацией.
 
@@ -97,6 +120,12 @@ TOC_FILENAME=table_of_contents.md
 TOC_MODEL_NAME=openai/gpt-4.1-mini
 TOC_SCAN_INTERVAL_MINUTES=10
 TOC_MAX_TAGS=5
+
+# Enrichment
+ENRICHMENT_ENABLED=true
+ENRICHMENT_MODEL_NAME=openai/gpt-4.1-mini
+EMBEDDING_MODEL_NAME=openai/text-embedding-3-small
+ENRICHMENT_DB_PATH=data/enrichment.sqlite3
 ```
 
 `JOURNAL_DIR` — путь внутри приложения. Для Docker оставляйте `/data`.
@@ -111,6 +140,14 @@ SSH_KEY_PATH=/Users/artem/.ssh/id_ed25519
 
 `TOC_MODEL_NAME` используется только для TOC enrichment: модель делает короткое summary и выбирает теги для `table_of_contents.md`.
 
+`ENRICHMENT_MODEL_NAME` используется для note-level и day-level structured output. `EMBEDDING_MODEL_NAME` используется для embedding каждой note-level записи; оставляйте здесь embedding-модель, например `openai/text-embedding-3-small`, а не chat-модель или экспериментальный slug. SQLite cache хранится в `data/enrichment.sqlite3`; папка `data/` добавлена в `.gitignore`, потому что база является локальным пересобираемым кэшем, а не source of truth.
+
+Если нужен временный capture-only режим без дополнительных LLM/embedding вызовов, поставьте:
+
+```bash
+ENRICHMENT_ENABLED=false
+```
+
 Если хотите проверить запись без Git remote, временно поставьте:
 
 ```bash
@@ -119,7 +156,7 @@ GIT_ENABLED=false
 
 ## Запуск через Docker
 
-1. Создайте `.env` из примера выше.
+1. Создайте `.env` из `.env.example` или примера выше.
 2. Убедитесь, что `HOST_JOURNAL_DIR` существует и является Git-репозиторием.
 3. Убедитесь, что `SSH_KEY_PATH` указывает на реальный приватный ключ.
 4. Запустите сервис:
@@ -131,6 +168,8 @@ docker compose logs -f dairy-bot
 ```
 
 Compose монтирует `SSH_KEY_PATH` в контейнер, копирует ключ во временную директорию, выставляет права `0600` и запускает бот через `/app/.venv/bin/python`. Это важно: системный `python` внутри контейнера не содержит зависимости проекта.
+
+SQLite cache enrichment слоя монтируется из локальной папки проекта `./data` в контейнерный путь `/app/data`. При `ENRICHMENT_DB_PATH=data/enrichment.sqlite3` файл будет виден на хосте как `data/enrichment.sqlite3`.
 
 Для Git over SSH также нужен `~/.ssh/known_hosts`; он монтируется автоматически.
 
@@ -167,11 +206,28 @@ TOC обновляется:
 
 Теги выбираются из фиксированной таксономии в `src/dairy_bot/services/toc_service.py`.
 
+## Enrichment слой
+
+Enrichment состоит из двух уровней.
+
+**Note-level** запускается сразу только для обычных сегодняшних text/voice записей через бота. Модель возвращает `gist`, `mood_evidence`, `mood`, `mood_confidence` и `topics`; в markdown записываются только `mood` и `topics`, а evidence, gist и embedding уходят в SQLite cache.
+
+**Day-level** пересчитывает весь день целиком и обновляет YAML frontmatter: `mood`, `mood_confidence`, `key_topics`, sparse facts (`sport`, `reading`, `purchases`, `eating_outside`, `deep_focus`, `sleep_quality`), `weekday`, `is_weekend`, `season` и `summary`. Evidence для sparse facts хранится в SQLite cache.
+
+Day-level запускается тихо:
+
+- по команде `/enrich` для сегодняшнего дня;
+- watchdog-проходом раз в `TOC_SCAN_INTERVAL_MINUTES`, если изменился не сегодняшний daily note;
+- ночным проходом около 03:00, если daily note изменился с момента последнего day-level enrichment.
+
+Watchdog сначала выполняет enrichment, затем TOC, чтобы `table_of_contents.md` индексировал уже обогащённый markdown. Если hash файла не изменился, LLM и embedding запросы не выполняются.
+
 ## Проверки
 
 ```bash
 uv lock
 uv run python -m compileall src main.py
+uv run pytest
 git diff --check
 ```
 

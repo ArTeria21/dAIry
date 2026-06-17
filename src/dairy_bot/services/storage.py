@@ -110,11 +110,12 @@ def _build_nav_line(prev_label: str | None, next_label: str | None) -> str:
     return " · ".join(links)
 
 
-def _entry_heading(current: datetime, target: datetime) -> str:
+def _entry_heading(current: datetime, target: datetime, entry_kind: str | None = None) -> str:
+    suffix = f" — {entry_kind}" if entry_kind else ""
     if current.date() == target.date():
-        return f"## {current:%H:%M}"
+        return f"## {current:%H:%M}{suffix}"
     month_name = MONTH_NAMES[current.month - 1]
-    return f"## {month_name} {current.day} {current:%H:%M}"
+    return f"## {month_name} {current.day} {current:%H:%M}{suffix}"
 
 
 async def _read_text(path: Path) -> str:
@@ -248,6 +249,7 @@ async def append_entry(
     moment: datetime | None = None,
     timezone: ZoneInfo | None = None,
     target_date: date | datetime | None = None,
+    entry_kind: str | None = None,
 ) -> Path:
     normalized_content = content.strip()
     if not normalized_content:
@@ -259,7 +261,7 @@ async def append_entry(
     note_path = daily_note_path(journal_dir, target, tz)
     await _ensure_daily_template(journal_dir, note_path, target, tz)
 
-    payload = f"{_entry_heading(current, target)}\n\n{normalized_content}\n\n"
+    payload = f"{_entry_heading(current, target, entry_kind)}\n\n{normalized_content}\n\n"
     async with aiofiles.open(note_path, "a", encoding="utf-8") as file:
         await file.write(payload)
 

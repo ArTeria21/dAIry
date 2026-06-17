@@ -19,3 +19,5 @@ gcp_creds.json
 # Test journal
 journal/
 
+# Local enrichment cache
+data/

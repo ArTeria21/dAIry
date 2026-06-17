@@ -1,58 +1,84 @@
 import asyncio
 import logging
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 
 from dairy_bot.config import Settings
-from dairy_bot.handlers.journal import get_journal_lock, router as journal_router
+from dairy_bot.handlers.journal import router as journal_router
 from dairy_bot.middlewares.auth import AuthMiddleware
-from dairy_bot.services.git_sync import GitPushError, GitService, GitSyncError
+from dairy_bot.services.background_reconciler import (
+    nightly_enrichment_loop,
+    periodic_background_loop,
+    reconcile_background_once,
+    reconcile_changed_enrichment,
+    reconcile_nightly_enrichment_once,
+    start_background_reconciliation,
+    stop_background_reconciliation,
+)
+from dairy_bot.services.enrichment_client import build_enrichment_client
+from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.toc_service import reconcile_toc
-
-logger = logging.getLogger(__name__)
 
 
 async def _reconcile_toc_once(
     settings: Settings, git_service: GitService, label: str
 ) -> None:
-    """Синхронизировать оглавление без конкуренции с записью дневника."""
-    if not settings.toc_enabled:
-        return
-
-    async with get_journal_lock():
-        try:
-            await asyncio.to_thread(git_service.prepare_for_write)
-            toc_paths = await reconcile_toc(settings.journal_dir, settings)
-            if not toc_paths:
-                logger.info("%s TOC indexing complete, everything up to date", label)
-                return
-
-            try:
-                await asyncio.to_thread(git_service.commit_and_push, toc_paths)
-            except GitPushError:
-                logger.warning(
-                    "%s TOC indexing saved locally, but push failed",
-                    label,
-                    exc_info=True,
-                )
-            logger.info("%s TOC indexing complete, %d files updated", label, len(toc_paths))
-        except GitSyncError:
-            logger.warning(
-                "%s TOC indexing skipped because repo sync is blocked",
-                label,
-                exc_info=True,
-            )
-        except Exception:
-            logger.exception("%s TOC indexing failed", label)
+    """Backward-compatible wrapper for the combined background reconciler."""
+    await _reconcile_background_once(settings, git_service, label)
 
 
-async def _periodic_toc_loop(settings: Settings, git_service: GitService) -> None:
-    """Периодически переиндексировать ручные правки в vault."""
-    interval_seconds = max(settings.toc_scan_interval_minutes, 1) * 60
-    while True:
-        await asyncio.sleep(interval_seconds)
-        await _reconcile_toc_once(settings, git_service, "Periodic")
+async def _reconcile_background_once(
+    settings: Settings,
+    git_service: GitService,
+    label: str,
+    now=None,
+) -> None:
+    await reconcile_background_once(
+        settings,
+        git_service,
+        label,
+        now=now,
+        client_factory=build_enrichment_client,
+        reconcile_toc_func=reconcile_toc,
+    )
+
+
+async def _reconcile_changed_enrichment(
+    settings: Settings,
+    *,
+    now=None,
+) -> list[Path]:
+    return await reconcile_changed_enrichment(
+        settings,
+        now=now,
+        client_factory=build_enrichment_client,
+    )
+
+
+async def _reconcile_nightly_enrichment_once(settings: Settings) -> list[Path]:
+    return await reconcile_nightly_enrichment_once(
+        settings,
+        client_factory=build_enrichment_client,
+    )
+
+
+async def _periodic_background_loop(settings: Settings, git_service: GitService) -> None:
+    await periodic_background_loop(
+        settings,
+        git_service,
+        client_factory=build_enrichment_client,
+        reconcile_toc_func=reconcile_toc,
+    )
+
+
+async def _nightly_enrichment_loop(settings: Settings, git_service: GitService) -> None:
+    await nightly_enrichment_loop(
+        settings,
+        git_service,
+        client_factory=build_enrichment_client,
+    )
 
 
 async def main() -> None:
@@ -80,23 +106,14 @@ async def main() -> None:
 
     await bot.delete_webhook(drop_pending_updates=True)
 
-    toc_task: asyncio.Task[None] | None = None
-    if settings.toc_enabled:
-        logger.info("Running initial TOC indexing...")
-        await _reconcile_toc_once(settings, git_service, "Initial")
-        toc_task = asyncio.create_task(_periodic_toc_loop(settings, git_service))
+    background_tasks = await start_background_reconciliation(settings, git_service)
 
     try:
         await dispatcher.start_polling(
             bot, allowed_updates=dispatcher.resolve_used_update_types()
         )
     finally:
-        if toc_task:
-            toc_task.cancel()
-            try:
-                await toc_task
-            except asyncio.CancelledError:
-                pass
+        await stop_background_reconciliation(background_tasks)
         await bot.session.close()
 
 

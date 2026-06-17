@@ -15,9 +15,49 @@ MESSAGES = {
         LANG_EN: "✅ Saved and synced.",
         LANG_RU: "✅ Сохранено и синхронизировано.",
     },
+    "save_started": {
+        LANG_EN: "Saving...",
+        LANG_RU: "Сохраняю...",
+    },
     "save_local_only": {
         LANG_EN: "✅ Saved locally, but sync failed.",
         LANG_RU: "✅ Сохранено локально, но синхронизация не удалась.",
+    },
+    "progress_writing_note": {
+        LANG_EN: "⏳ Writing note to file...",
+        LANG_RU: "⏳ Записываю заметку в файл...",
+    },
+    "progress_note_written": {
+        LANG_EN: "✅ Note written to file",
+        LANG_RU: "✅ Заметка записана в файл",
+    },
+    "progress_note_processing": {
+        LANG_EN: "⏳ Processing note with LLM...",
+        LANG_RU: "⏳ Обрабатываю заметку через LLM...",
+    },
+    "progress_note_processed": {
+        LANG_EN: "✅ LLM processed note. {summary}",
+        LANG_RU: "✅ Заметка обработана LLM. {summary}",
+    },
+    "progress_note_failed": {
+        LANG_EN: "⚠️ LLM processing failed; I will retry in the background",
+        LANG_RU: "⚠️ LLM-обработка не удалась; повторю в фоне",
+    },
+    "progress_git_syncing": {
+        LANG_EN: "⏳ Syncing with git...",
+        LANG_RU: "⏳ Синхронизирую с git...",
+    },
+    "progress_git_synced": {
+        LANG_EN: "✅ Synced with git",
+        LANG_RU: "✅ Синхронизировано с git",
+    },
+    "progress_git_local_only": {
+        LANG_EN: "✅ Saved locally, but git sync failed",
+        LANG_RU: "✅ Сохранено локально, но синхронизация с git не удалась",
+    },
+    "progress_note_summary": {
+        LANG_EN: "Mood: {mood} ({confidence:.2f}), topics: {topics}",
+        LANG_RU: "Настроение: {mood} ({confidence:.2f}), темы: {topics}",
     },
     "repo_sync_blocked": {
         LANG_EN: "⚠️ I couldn't sync the journal repo safely. Commit, stash, or revert local changes first, then try again.",
@@ -99,6 +139,58 @@ MESSAGES = {
         LANG_EN: "Future dates are not available. Choose today or a past date.",
         LANG_RU: "Нельзя выбрать дату в будущем. Выберите сегодняшний или прошедший день.",
     },
+    "enrichment_disabled": {
+        LANG_EN: "LLM enrichment is disabled.",
+        LANG_RU: "LLM-обогащение выключено.",
+    },
+    "enrichment_done": {
+        LANG_EN: "✅ Enrichment updated.",
+        LANG_RU: "✅ Обогащение обновлено.",
+    },
+    "enrichment_failed": {
+        LANG_EN: "⚠️ Enrichment failed. I will retry during the next background run.",
+        LANG_RU: "⚠️ Обогащение не удалось. Повторю во время следующего фонового запуска.",
+    },
+}
+
+MOOD_LABELS = {
+    LANG_RU: {
+        "joy": "радость",
+        "calm": "спокойствие",
+        "sadness": "грусть",
+        "anger": "злость",
+        "fear": "тревога",
+        "neutral": "нейтральное",
+        "mixed": "смешанное",
+    }
+}
+
+TOPIC_LABELS = {
+    LANG_RU: {
+        "work": "работа",
+        "learning": "обучение",
+        "money": "деньги",
+        "health": "здоровье",
+        "fitness": "спорт",
+        "nutrition": "питание",
+        "relationships": "отношения",
+        "travel": "путешествия",
+        "creativity": "творчество",
+        "identity": "идентичность",
+        "spirituality": "духовность",
+        "decision_making": "решения",
+        "gratitude": "благодарность",
+        "technology": "технологии",
+        "entertainment": "развлечения",
+        "therapy": "терапия",
+        "planning": "планирование",
+        "productivity": "продуктивность",
+        "nature": "природа",
+        "language": "язык",
+        "living_situation": "быт",
+        "bureaucracy": "бюрократия",
+        "reflection": "рефлексия",
+    }
 }
 
 
@@ -112,6 +204,18 @@ def t(key: str, lang: str | None = None) -> str:
     lang_code = _normalize_lang(lang)
     values = MESSAGES.get(key, {})
     return values.get(lang_code, values.get(DEFAULT_LANG, ""))
+
+
+def mood_label(value: object, lang: str | None = None) -> str:
+    raw = getattr(value, "value", value)
+    text = str(raw)
+    return MOOD_LABELS.get(_normalize_lang(lang), {}).get(text, text)
+
+
+def topic_label(value: object, lang: str | None = None) -> str:
+    raw = getattr(value, "value", value)
+    text = str(raw)
+    return TOPIC_LABELS.get(_normalize_lang(lang), {}).get(text, text)
 
 
 def format_transcription_preview(transcription: str, lang: str | None = None) -> str:

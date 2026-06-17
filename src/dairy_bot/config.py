@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     toc_scan_interval_minutes: int = Field(default=10, alias="TOC_SCAN_INTERVAL_MINUTES")
     toc_model_name: str = Field(default="openai/gpt-4.1-mini", alias="TOC_MODEL_NAME")
     toc_max_tags: int = Field(default=5, alias="TOC_MAX_TAGS")
+    # LLM enrichment
+    enrichment_enabled: bool = Field(default=False, alias="ENRICHMENT_ENABLED")
+    enrichment_model_name: str = Field(
+        default="openai/gpt-4.1-mini", alias="ENRICHMENT_MODEL_NAME"
+    )
+    embedding_model_name: str = Field(
+        default="openai/text-embedding-3-small", alias="EMBEDDING_MODEL_NAME"
+    )
+    enrichment_db_path: Path = Field(
+        default=Path("data/enrichment.sqlite3"), alias="ENRICHMENT_DB_PATH"
+    )
 
     @field_validator("timezone", mode="before")
     @classmethod
