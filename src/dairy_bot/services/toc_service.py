@@ -61,7 +61,13 @@ TOC_STATE_FILENAME = ".toc_index.json"
 DAILY_NOTE_PATTERN = re.compile(r"^(\d{4})/(\d{2})/(\d{4}-\d{2}-\d{2})\.md$")
 _DATE_HEADER_RE = re.compile(r"^#\s+\d{4}-\d{2}-\d{2}\s*$")
 MAX_NOTE_CONTENT_FOR_LLM = 8000
+TOC_SUMMARY_ATTEMPTS = 2
+TOC_SUMMARY_MAX_TOKENS = 500
 _MONTH_NAMES = {i: calendar.month_name[i] for i in range(1, 13)}
+
+
+class TocLLMResponseError(ValueError):
+    """Raised when the TOC LLM response cannot be used."""
 
 # ---------------------------------------------------------------------------
 # Frontmatter helpers without a hard dependency on storage.py
@@ -279,7 +285,16 @@ def _parse_llm_json(raw: str) -> dict[str, Any]:
         lines = text.splitlines()
         lines = [ln for ln in lines if not ln.strip().startswith("```")]
         text = "\n".join(lines).strip()
-    return json.loads(text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise TocLLMResponseError(
+            "TOC LLM returned invalid JSON "
+            f"({exc.msg} at line {exc.lineno} column {exc.colno})"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise TocLLMResponseError("TOC LLM returned JSON that is not an object")
+    return parsed
 
 
 async def _summarize_note(
@@ -289,17 +304,44 @@ async def _summarize_note(
     model_name: str,
     max_tags: int,
 ) -> dict[str, Any]:
-    completion = await client.chat.completions.create(
-        model=model_name,
-        temperature=0.2,
-        response_format=_build_response_format(max_tags),
-        messages=[
-            {"role": "system", "content": _build_system_prompt(max_tags)},
-            {"role": "user", "content": _build_user_prompt(cleaned_text, rel_path)},
-        ],
-    )
-    raw = completion.choices[0].message.content or ""
-    parsed = _parse_llm_json(raw)
+    last_error: TocLLMResponseError | None = None
+    for attempt in range(TOC_SUMMARY_ATTEMPTS):
+        system_prompt = _build_system_prompt(max_tags)
+        if attempt > 0:
+            system_prompt += (
+                "\n\nYour previous response could not be parsed as JSON. "
+                "Return exactly one complete JSON object that matches the schema."
+            )
+        completion = await client.chat.completions.create(
+            model=model_name,
+            temperature=0.2,
+            max_tokens=TOC_SUMMARY_MAX_TOKENS,
+            response_format=_build_response_format(max_tags),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": _build_user_prompt(cleaned_text, rel_path)},
+            ],
+        )
+        raw = completion.choices[0].message.content or ""
+        try:
+            parsed = _parse_llm_json(raw)
+            break
+        except TocLLMResponseError as exc:
+            last_error = exc
+            finish_reason = getattr(completion.choices[0], "finish_reason", None)
+            logger.warning(
+                "TOC summary attempt %s/%s returned unusable output for %s "
+                "(finish_reason=%s): %s",
+                attempt + 1,
+                TOC_SUMMARY_ATTEMPTS,
+                rel_path,
+                finish_reason,
+                exc,
+            )
+    else:
+        if last_error is not None:
+            raise last_error
+        raise TocLLMResponseError("TOC LLM did not return a usable response")
 
     summary = str(parsed.get("summary", "")).strip()
     raw_tags = parsed.get("tags", [])
@@ -528,6 +570,8 @@ async def reconcile_toc(
                         "tags": result["tags"],
                         "last_indexed_at": datetime.now().isoformat(),
                     }
+                except TocLLMResponseError as exc:
+                    logger.warning("Failed to index %s: %s", rel_path, exc)
                 except Exception:
                     logger.exception("Failed to index %s, skipping", rel_path)
         finally:
