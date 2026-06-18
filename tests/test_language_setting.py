@@ -59,7 +59,13 @@ class FakeCompletionsResource:
         self.calls.append(kwargs)
         return SimpleNamespace(
             choices=[
-                SimpleNamespace(message=SimpleNamespace(content=self.content))
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(
+                        content=self.content,
+                        refusal=None,
+                    ),
+                )
             ]
         )
 
@@ -71,9 +77,7 @@ def make_enrichment_client(language: str, content: str):
         language=language,
     )
     completions = FakeCompletionsResource(content)
-    client.client = SimpleNamespace(
-        chat=SimpleNamespace(completions=completions)
-    )
+    client.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     return client, completions
 
 
@@ -198,11 +202,13 @@ def test_EC_2_ru_language_keeps_mood_topics_key_topics_and_toc_tags_in_english(
 
     run(client.enrich_note("Сегодня было спокойно."))
 
-    note_schema = completions.calls[0]["response_format"]["json_schema"]["schema"]
+    note_schema = completions.calls[0]["response_format"]["json_schema"][
+        "schema"
+    ]
     assert "calm" in note_schema["properties"]["mood"]["enum"]
     assert "спокойствие" not in note_schema["properties"]["mood"]["enum"]
-    assert "reflection" in note_schema["properties"]["topics"]["items"]["enum"]
-    assert "рефлексия" not in note_schema["properties"]["topics"]["items"]["enum"]
+    assert "reflection" in note_schema["$defs"]["Topic"]["enum"]
+    assert "рефлексия" not in note_schema["$defs"]["Topic"]["enum"]
 
     FakeAsyncOpenAI.instances.clear()
     write_daily_note(tmp_path)

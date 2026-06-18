@@ -281,6 +281,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pytest" },
     { name = "pyyaml" },
+    { name = "tqdm" },
     { name = "tzdata" },
 ]
 
@@ -299,6 +300,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.5.2" },
     { name = "pytest", specifier = ">=9.1.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
+    { name = "tqdm", specifier = ">=4.67.1" },
     { name = "tzdata", specifier = ">=2024.1" },
 ]
 

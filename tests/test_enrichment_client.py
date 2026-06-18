@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 from dairy_bot.services.enrichment_client import (
     OpenRouterEnrichmentClient,
+    OPENROUTER_STRUCTURED_EXTRA_BODY,
+    STRUCTURED_OUTPUT_MAX_TOKENS,
     _response_format,
 )
 from dairy_bot.services.enrichment_schemas import DayEnrichment, NoteEnrichment
@@ -21,6 +23,28 @@ class FakeEmbeddingsResource:
 
 class FakeSettings:
     embedding_model_name = "openai/text-embedding-3-small"
+    enrichment_model_name = "test/model"
+    language = "EN"
+
+
+class FakeCompletionsResource:
+    def __init__(self, content: str):
+        self.content = content
+        self.kwargs = None
+
+    async def create(self, **kwargs):
+        self.kwargs = kwargs
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(
+                        content=self.content,
+                        refusal=None,
+                    ),
+                )
+            ]
+        )
 
 
 def run(coro):
@@ -43,7 +67,27 @@ def test_AC_1_embedding_request_uses_configured_model_and_float_encoding():
     }
 
 
-def test_note_enrichment_response_format_inlines_ref_sibling_keywords():
+def test_structured_completion_requires_schema_capable_openrouter_provider():
+    client = object.__new__(OpenRouterEnrichmentClient)
+    client.settings = FakeSettings()
+    completions = FakeCompletionsResource(
+        (
+            '{"gist":"A short summary.","mood_evidence":"The tone is calm.",'
+            '"mood":"calm","mood_confidence":0.7,"topics":["reflection"]}'
+        )
+    )
+    client.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    run(client.enrich_note("Today was calm."))
+
+    assert completions.kwargs["max_tokens"] == STRUCTURED_OUTPUT_MAX_TOKENS
+    assert completions.kwargs["extra_body"] == OPENROUTER_STRUCTURED_EXTRA_BODY
+    assert completions.kwargs["response_format"] == _response_format(
+        NoteEnrichment, "note_enrichment"
+    )
+
+
+def test_note_enrichment_response_format_uses_openai_strict_schema():
     response_format = _response_format(NoteEnrichment, "note_enrichment")
 
     assert response_format["type"] == "json_schema"
@@ -62,9 +106,8 @@ def test_note_enrichment_response_format_inlines_ref_sibling_keywords():
     ]
     assert schema["properties"]["mood"]["type"] == "string"
     assert "enum" in schema["properties"]["mood"]
-    assert "$ref" not in schema["properties"]["mood"]
-    assert "$ref" not in schema["properties"]["topics"]["items"]
-    assert "$defs" not in schema
+    assert schema["properties"]["topics"]["items"] == {"$ref": "#/$defs/Topic"}
+    assert "Topic" in schema["$defs"]
 
 
 def test_day_enrichment_response_format_requires_nullable_sparse_fields():
@@ -82,25 +125,21 @@ def test_day_enrichment_response_format_requires_nullable_sparse_fields():
         {"type": "boolean"},
         {"type": "null"},
     ]
-    _assert_strict_schema_subset(schema)
+    _assert_openai_strict_schema_subset(schema)
 
 
-def _assert_strict_schema_subset(value):
+def _assert_openai_strict_schema_subset(value):
     if isinstance(value, list):
         for item in value:
-            _assert_strict_schema_subset(item)
+            _assert_openai_strict_schema_subset(item)
         return
     if not isinstance(value, dict):
         return
 
     assert "default" not in value
-    assert "title" not in value
-    assert "$defs" not in value
-    assert "definitions" not in value
-    assert "$ref" not in value
     if value.get("type") == "object":
         assert value.get("additionalProperties") is False
         assert value.get("required") == list(value.get("properties", {}))
 
     for child in value.values():
-        _assert_strict_schema_subset(child)
+        _assert_openai_strict_schema_subset(child)

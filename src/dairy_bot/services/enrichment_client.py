@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from typing import Any
 
 from openai import AsyncOpenAI
+from openai.lib._pydantic import to_strict_json_schema
 from pydantic import BaseModel
 
 from dairy_bot.config import Settings, language_display_name
 from dairy_bot.services.enrichment_schemas import DayEnrichment, NoteEnrichment, Topic
+
+
+STRUCTURED_OUTPUT_MAX_TOKENS = 2_000
+OPENROUTER_STRUCTURED_EXTRA_BODY = {
+    "provider": {"require_parameters": True},
+    "plugins": [{"id": "response-healing"}],
+}
 
 
 def _note_system_prompt(language: str) -> str:
@@ -83,14 +90,26 @@ class OpenRouterEnrichmentClient:
         completion = await self.client.chat.completions.create(
             model=model,
             temperature=0.2,
+            max_tokens=STRUCTURED_OUTPUT_MAX_TOKENS,
             response_format=_response_format(schema_model, schema_name),
+            extra_body=OPENROUTER_STRUCTURED_EXTRA_BODY,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
         )
-        raw = completion.choices[0].message.content or "{}"
-        return _parse_json(raw)
+        choice = completion.choices[0]
+        message = choice.message
+        raw = message.content or ""
+        if raw.strip():
+            return schema_model.model_validate_json(raw).model_dump(mode="json")
+
+        refusal = getattr(message, "refusal", None)
+        raise ValueError(
+            "Structured completion returned no parseable content "
+            f"(schema={schema_name}, finish_reason={choice.finish_reason!r}, "
+            f"refusal={refusal!r})"
+        )
 
 
 def build_enrichment_client(settings: Settings) -> OpenRouterEnrichmentClient:
@@ -98,92 +117,14 @@ def build_enrichment_client(settings: Settings) -> OpenRouterEnrichmentClient:
 
 
 def _response_format(schema_model: type[BaseModel], name: str) -> dict[str, Any]:
-    schema = _strict_json_schema(schema_model)
     return {
         "type": "json_schema",
         "json_schema": {
             "name": name,
             "strict": True,
-            "schema": schema,
+            "schema": to_strict_json_schema(schema_model),
         },
     }
-
-
-def _strict_json_schema(schema_model: type[BaseModel]) -> dict[str, Any]:
-    """Normalize Pydantic output for OpenAI strict JSON schema mode.
-
-    Invariants: inline refs, drop defaults/titles, require every declared
-    property, and close all object schemas with additionalProperties=false.
-    """
-    raw_schema = schema_model.model_json_schema()
-    schema = _normalize_json_schema(raw_schema, root=raw_schema)
-    schema.pop("$defs", None)
-    schema.pop("definitions", None)
-    return schema
-
-
-def _normalize_json_schema(value: Any, *, root: dict[str, Any]) -> Any:
-    if isinstance(value, list):
-        return [_normalize_json_schema(item, root=root) for item in value]
-    if not isinstance(value, dict):
-        return value
-
-    schema = _resolve_schema_ref(value, root=root)
-    schema.pop("default", None)
-    schema.pop("title", None)
-
-    if schema.get("type") == "object":
-        schema["additionalProperties"] = False
-
-    properties = schema.get("properties")
-    if isinstance(properties, dict):
-        schema["required"] = list(properties)
-        schema["properties"] = {
-            key: _normalize_json_schema(prop_schema, root=root)
-            for key, prop_schema in properties.items()
-        }
-
-    items = schema.get("items")
-    if isinstance(items, dict):
-        schema["items"] = _normalize_json_schema(items, root=root)
-
-    any_of = schema.get("anyOf")
-    if isinstance(any_of, list):
-        schema["anyOf"] = _normalize_json_schema(any_of, root=root)
-
-    all_of = schema.get("allOf")
-    if isinstance(all_of, list):
-        normalized_all_of = _normalize_json_schema(all_of, root=root)
-        if len(normalized_all_of) == 1:
-            schema.pop("allOf")
-            schema.update(normalized_all_of[0])
-        else:
-            schema["allOf"] = normalized_all_of
-
-    return schema
-
-
-def _resolve_schema_ref(schema: dict[str, Any], *, root: dict[str, Any]) -> dict[str, Any]:
-    ref = schema.get("$ref")
-    if not isinstance(ref, str):
-        return deepcopy(schema)
-
-    resolved = _resolve_json_pointer(root, ref)
-    sibling_schema = {key: value for key, value in schema.items() if key != "$ref"}
-    return {**deepcopy(resolved), **deepcopy(sibling_schema)}
-
-
-def _resolve_json_pointer(schema: dict[str, Any], ref: str) -> dict[str, Any]:
-    if not ref.startswith("#/"):
-        raise ValueError(f"Unsupported JSON Schema ref: {ref}")
-
-    current: Any = schema
-    for raw_part in ref[2:].split("/"):
-        part = raw_part.replace("~1", "/").replace("~0", "~")
-        current = current[part]
-    if not isinstance(current, dict):
-        raise ValueError(f"JSON Schema ref does not point to an object: {ref}")
-    return current
 
 
 def _parse_json(raw: str) -> dict[str, Any]:
