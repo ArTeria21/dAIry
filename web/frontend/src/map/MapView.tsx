@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
-import type { PointerEvent, WheelEvent } from "react";
-import { useEffect, useState } from "react";
+import type { PointerEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   clusterPalette,
@@ -75,6 +75,7 @@ export function MapView() {
   const [noteUnavailable, setNoteUnavailable] = useState(false);
   const [viewTransform, setViewTransform] = useState<ViewTransform>(initialViewTransform);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const mapPanelRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -94,6 +95,29 @@ export function MapView() {
     };
   }, []);
 
+  useEffect(() => {
+    const mapPanel = mapPanelRef.current;
+    if (!mapPanel || !payload) {
+      return;
+    }
+
+    function handleWheel(event: WheelEvent) {
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+      event.stopPropagation();
+
+      const zoomFactor = Math.exp(-clamp(event.deltaY, -240, 240) * zoomIntensity);
+      setViewTransform((current) => ({
+        ...current,
+        scale: clamp(Number((current.scale * zoomFactor).toFixed(4)), minZoom, maxZoom),
+      }));
+    }
+
+    mapPanel.addEventListener("wheel", handleWheel, { passive: false });
+    return () => mapPanel.removeEventListener("wheel", handleWheel);
+  }, [payload]);
+
   async function selectPoint(point: MapPoint) {
     setSelectedPointId(point.id);
     setNote(null);
@@ -103,16 +127,6 @@ export function MapView() {
     } catch {
       setNoteUnavailable(true);
     }
-  }
-
-  function handleWheel(event: WheelEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const zoomFactor = Math.exp(-clamp(event.deltaY, -240, 240) * zoomIntensity);
-
-    setViewTransform((current) => ({
-      ...current,
-      scale: clamp(Number((current.scale * zoomFactor).toFixed(4)), minZoom, maxZoom),
-    }));
   }
 
   function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -179,14 +193,14 @@ export function MapView() {
           aria-label="JOURNAL EMBEDDING MAP"
           className={cx(
             mapSurfaceHeightClass,
-            "relative cursor-grab touch-none overflow-hidden rounded-[2px] border border-hairline bg-cream-paper",
+            "relative cursor-grab touch-none overflow-hidden overscroll-contain rounded-[2px] border border-hairline bg-cream-paper",
           )}
           data-testid="map-panel"
+          ref={mapPanelRef}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
-          onWheel={handleWheel}
         >
           {payload.points.length === 0 ? (
             <div className={cx(mapSurfaceHeightClass, "grid place-items-center")}>

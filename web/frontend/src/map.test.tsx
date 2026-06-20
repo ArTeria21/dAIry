@@ -523,6 +523,30 @@ describe("Map interaction regressions", () => {
     expect(zoomed.scale).toBeLessThan(1.1);
   });
 
+  it("keeps wheel gestures local to the map instead of bubbling into the page", async () => {
+    installFetchMock();
+    const windowWheelHandler = vi.fn();
+    window.addEventListener("wheel", windowWheelHandler);
+
+    await renderAuthenticatedMap();
+    const viewport = await screen.findByTestId("map-viewport");
+    const wheelEvent = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 320,
+      clientY: 240,
+      deltaY: -100,
+    });
+
+    fireEvent(viewport, wheelEvent);
+
+    expect(wheelEvent.defaultPrevented).toBe(true);
+    expect(windowWheelHandler).not.toHaveBeenCalled();
+    expect(readViewportTransform(viewport).scale).toBeGreaterThan(1);
+
+    window.removeEventListener("wheel", windowWheelHandler);
+  });
+
   it("keeps point clicks from starting a drag gesture before opening the note panel", async () => {
     installFetchMock();
 
