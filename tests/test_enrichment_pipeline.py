@@ -172,7 +172,7 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_AC_1_today_text_save_edits_one_status_message_saved_enriched_synced(
+def test_EC_2_today_text_save_keeps_existing_progress_status(
     tmp_path, monkeypatch
 ):
     freeze_handlers(monkeypatch)
@@ -197,7 +197,7 @@ def test_AC_1_today_text_save_edits_one_status_message_saved_enriched_synced(
     assert git.committed_paths and today_path in git.committed_paths
 
 
-def test_AC_1_today_text_save_uses_selected_russian_for_progress_status(
+def test_today_text_save_uses_selected_russian_for_progress_status(
     tmp_path, monkeypatch
 ):
     freeze_handlers(monkeypatch)
@@ -218,7 +218,38 @@ def test_AC_1_today_text_save_uses_selected_russian_for_progress_status(
     assert "Note written to file" not in message.answers[0].text
 
 
-def test_AC_2_post_factum_save_does_not_call_immediate_note_llm_or_show_enrichment_progress(
+def test_AC_1_AC_2_AC_3_AC_5_post_factum_text_save_enriches_with_progress_and_clears_target(
+    tmp_path, monkeypatch
+):
+    freeze_handlers(monkeypatch)
+    client = FakeNoteClient()
+    monkeypatch.setattr(journal, "build_enrichment_client", lambda settings: client)
+    settings = FakeSettings(tmp_path)
+    git = FakeGit()
+    state = FakeState()
+
+    run(journal._set_entry_target_date(state, date(2026, 6, 13)))
+    message = FakeMessage("Post-factum note")
+    run(journal.handle_text(message, state, settings, git))
+    next_message = FakeMessage("Current-day follow-up")
+    run(journal.handle_text(next_message, state, settings, git))
+
+    target_path = note_path(tmp_path, "2026-06-13")
+    today_path = note_path(tmp_path, "2026-06-16")
+    assert len(message.answers) == 1
+    assert message.answers[0].edits == [
+        "✅ Note written to file\n⏳ Processing note with LLM...\n⏳ Syncing with git...",
+        "✅ Note written to file\n✅ LLM processed note. Mood: calm (0.77), topics: reflection, productivity\n⏳ Syncing with git...",
+        "✅ Note written to file\n✅ LLM processed note. Mood: calm (0.77), topics: reflection, productivity\n✅ Synced with git",
+    ]
+    assert "Post-factum note" in read_text(target_path)
+    assert "mood:: calm · topics:: reflection, productivity" in read_text(target_path)
+    assert "Current-day follow-up" in read_text(today_path)
+    assert "Current-day follow-up" not in read_text(target_path)
+    assert client.note_calls == ["Post-factum note", "Current-day follow-up"]
+
+
+def test_AC_4_post_factum_voice_confirm_runs_note_level_enrichment(
     tmp_path, monkeypatch
 ):
     freeze_handlers(monkeypatch)
@@ -226,20 +257,40 @@ def test_AC_2_post_factum_save_does_not_call_immediate_note_llm_or_show_enrichme
     monkeypatch.setattr(journal, "build_enrichment_client", lambda settings: client)
     settings = FakeSettings(tmp_path)
     state = FakeState()
+    callback = FakeCallback()
 
     run(journal._set_entry_target_date(state, date(2026, 6, 13)))
-    message = FakeMessage("Post-factum note")
+    run(state.update_data(transcription="Confirmed voice text"))
+    run(journal.confirm_voice(callback, state, settings, FakeGit()))
+
+    target_path = note_path(tmp_path, "2026-06-13")
+    assert "Confirmed voice text" in read_text(target_path)
+    assert "mood:: calm · topics:: reflection, productivity" in read_text(target_path)
+    assert client.note_calls == ["Confirmed voice text"]
+
+
+def test_EC_1_post_factum_text_save_without_enrichment_uses_plain_confirmation(
+    tmp_path, monkeypatch
+):
+    freeze_handlers(monkeypatch)
+    client = FakeNoteClient()
+    monkeypatch.setattr(journal, "build_enrichment_client", lambda settings: client)
+    settings = FakeSettings(tmp_path, enrichment_enabled=False)
+    state = FakeState()
+
+    run(journal._set_entry_target_date(state, date(2026, 6, 13)))
+    message = FakeMessage("Post-factum note without enrichment")
     run(journal.handle_text(message, state, settings, FakeGit()))
 
     target_path = note_path(tmp_path, "2026-06-13")
     assert len(message.answers) == 1
     assert message.answers[0].edits == ["✅ Saved and synced."]
-    assert "Post-factum note" in read_text(target_path)
+    assert "Post-factum note without enrichment" in read_text(target_path)
     assert "mood::" not in read_text(target_path)
     assert client.note_calls == []
 
 
-def test_ERR_1_today_save_keeps_raw_note_when_note_level_enrichment_fails(
+def test_today_save_keeps_raw_note_when_note_level_enrichment_fails(
     tmp_path, monkeypatch
 ):
     freeze_handlers(monkeypatch)
@@ -256,6 +307,33 @@ def test_ERR_1_today_save_keeps_raw_note_when_note_level_enrichment_fails(
 
     content = read_text(note_path(tmp_path, "2026-06-16"))
     assert "Сегодняшняя заметка с ошибкой enrichment" in content
+    assert "mood::" not in content
+    assert message.answers[0].edits[-1] == (
+        "✅ Note written to file\n"
+        "⚠️ LLM processing failed; I will retry in the background\n"
+        "✅ Synced with git"
+    )
+
+
+def test_ERR_1_post_factum_save_keeps_raw_note_when_note_level_enrichment_fails(
+    tmp_path, monkeypatch
+):
+    freeze_handlers(monkeypatch)
+
+    class FailingClient(FakeNoteClient):
+        async def enrich_note(self, text: str) -> NoteEnrichment:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(journal, "build_enrichment_client", lambda settings: FailingClient())
+    settings = FakeSettings(tmp_path)
+    state = FakeState()
+    message = FakeMessage("Post-factum note with failing enrichment")
+
+    run(journal._set_entry_target_date(state, date(2026, 6, 13)))
+    run(journal.handle_text(message, state, settings, FakeGit()))
+
+    content = read_text(note_path(tmp_path, "2026-06-13"))
+    assert "Post-factum note with failing enrichment" in content
     assert "mood::" not in content
     assert message.answers[0].edits[-1] == (
         "✅ Note written to file\n"

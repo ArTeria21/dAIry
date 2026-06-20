@@ -426,8 +426,7 @@ async def _save_text_message(
     target_date = await _get_entry_target_date(state)
     status_message = None
     now = datetime.now(settings.timezone)
-    is_today_target = target_date is None or target_date == now.date()
-    if getattr(settings, "enrichment_enabled", False) and is_today_target:
+    if getattr(settings, "enrichment_enabled", False):
         status_message = await _safe_telegram_request(
             f"{action} progress message",
             lambda: message.answer(messages.t("progress_writing_note", lang)),
@@ -580,12 +579,7 @@ async def confirm_voice(
     target_date = await _get_entry_target_date(state)
     status_message = None
     now = datetime.now(settings.timezone)
-    is_today_target = target_date is None or target_date == now.date()
-    if (
-        callback.message
-        and getattr(settings, "enrichment_enabled", False)
-        and is_today_target
-    ):
+    if callback.message and getattr(settings, "enrichment_enabled", False):
         status_message = await _safe_telegram_request(
             "voice confirm progress message",
             lambda: callback.message.answer(

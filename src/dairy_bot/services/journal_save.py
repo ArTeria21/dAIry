@@ -68,10 +68,7 @@ async def save_entry_with_sync(
             return "blocked"
 
         current = moment or datetime.now(settings.timezone)
-        is_today_target = target_date is None or target_date == current.date()
-        immediate_enrichment = bool(
-            getattr(settings, "enrichment_enabled", False) and is_today_target
-        )
+        immediate_enrichment = bool(getattr(settings, "enrichment_enabled", False))
         note_path = await append_entry(
             settings.journal_dir,
             content,

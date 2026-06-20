@@ -17,7 +17,7 @@
 - В дневной заметке сохраняются ссылки на ближайший предыдущий и следующий существующий день с записями.
 - Git sync включается через `GIT_ENABLED=true`: бот подтягивает remote перед записью, затем коммитит и пушит изменения.
 - TOC слой включается через `TOC_ENABLED=true`: бот поддерживает `table_of_contents.md` и `.toc_index.json`, включая изменения, добавленные в прошлые дни.
-- Enrichment слой включается через `ENRICHMENT_ENABLED=true`: сегодняшние новые записи получают note-level mood/topics сразу после сохранения, а прошлые дни и ручные правки обрабатываются тихим watchdog-проходом вместе с TOC.
+- Enrichment слой включается через `ENRICHMENT_ENABLED=true`: новые записи через бота, включая post-factum записи через `/day` и `/yesterday`, получают note-level mood/topics сразу после сохранения. Ручные правки старых дней обрабатываются тихим watchdog-проходом вместе с TOC.
 - Доступ ограничен одним Telegram-пользователем через `ALLOWED_USER_ID`.
 
 ## Формат заметок
@@ -37,7 +37,7 @@ type: daily
 Текст записи
 ```
 
-Когда включён note-level enrichment, у новых сегодняшних записей под текстом появляется компактная Dataview-строка:
+Когда включён note-level enrichment, у новых записей через бота под текстом появляется компактная Dataview-строка:
 
 ```markdown
 ## 14:32 — text
@@ -46,7 +46,7 @@ type: daily
 mood:: anger · topics:: learning, identity
 ```
 
-Для прошлых дней эта строка не добавляется сразу при post-factum сохранении через `/day` или `/yesterday`. Такие изменения подхватываются тихим watchdog-проходом раз в `TOC_SCAN_INTERVAL_MINUTES`, чтобы не спамить LLM-запросами во время ручного восстановления старых дней.
+Для ручных правок старых дней эта строка добавляется тихим watchdog-проходом раз в `TOC_SCAN_INTERVAL_MINUTES`.
 
 Если предыдущего или следующего существующего дня нет, соответствующая ссылка пропускается. Старые заметки не мигрируются массово: бот просто перестаёт создавать старые поля метрик и служебные блоки.
 
@@ -75,7 +75,7 @@ mood:: anger · topics:: learning, identity
 
 Любое обычное текстовое сообщение считается новой записью. Голосовое сообщение сначала проходит транскрибацию и подтверждение.
 
-Если `ENRICHMENT_ENABLED=true` и запись сохраняется в сегодняшний день, бот отвечает одним статусным сообщением и редактирует его по мере прогресса:
+Если `ENRICHMENT_ENABLED=true`, бот отвечает одним статусным сообщением и редактирует его по мере прогресса:
 
 ```text
 ✅ Note written to file
@@ -281,7 +281,7 @@ TOC обновляется:
 
 Enrichment состоит из двух уровней.
 
-**Note-level** запускается сразу только для обычных сегодняшних text/voice записей через бота. Модель возвращает `gist`, `mood_evidence`, `mood`, `mood_confidence` и `topics`; в markdown записываются только `mood` и `topics`, а evidence, gist и embedding уходят в SQLite cache.
+**Note-level** запускается сразу для text/voice записей через бота, включая post-factum сохранение в выбранный прошлый день. Модель возвращает `gist`, `mood_evidence`, `mood`, `mood_confidence` и `topics`; в markdown записываются только `mood` и `topics`, а evidence, gist и embedding уходят в SQLite cache.
 
 **Day-level** пересчитывает весь день целиком и обновляет YAML frontmatter: `mood`, `mood_confidence`, `key_topics`, sparse facts (`sport`, `reading`, `purchases`, `eating_outside`, `deep_focus`, `sleep_quality`), `weekday`, `is_weekend`, `season` и `summary`. Evidence для sparse facts хранится в SQLite cache.
 
