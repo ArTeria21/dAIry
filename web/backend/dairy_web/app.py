@@ -319,14 +319,20 @@ def create_app(
         if bucket != "week":
             raise HTTPException(status_code=400, detail="Only week bucket is supported")
         counts_by_period: dict[str, defaultdict[str, int]] = {}
+        totals_by_period: defaultdict[str, int] = defaultdict(int)
         for note in store.list_notes():
             period = _week_period(note.date)
+            totals_by_period[period] += 1
             counts = counts_by_period.setdefault(period, defaultdict(int))
             for topic in note.topics:
                 counts[topic] += 1
         return {
             "buckets": [
-                {"period": period, "counts": dict(counts)}
+                {
+                    "period": period,
+                    "counts": dict(counts),
+                    "total": totals_by_period[period],
+                }
                 for period, counts in sorted(counts_by_period.items())
             ]
         }

@@ -7,6 +7,7 @@ export type LegendItem = {
   key: string;
   label: string;
   count?: number;
+  disabled?: boolean;
   swatch?: string;
   swatchTestId?: string;
 };
@@ -36,11 +37,16 @@ export function Legend({ activeKey, ariaLabel, items, onToggle }: LegendProps) {
               aria-pressed={active}
               className={cx(
                 chromeTextClass,
-                "inline-flex h-8 max-w-full items-center gap-2 rounded-[2px] border bg-cream-paper px-2 text-[10px]",
+                "inline-flex h-8 max-w-full items-center gap-2 rounded-[2px] border bg-cream-paper px-2 text-[10px] disabled:opacity-55",
                 active ? "border-signal-orange text-ink-black" : "border-hairline text-slate",
               )}
+              disabled={item.disabled}
               key={item.key}
-              onClick={() => onToggle(item.key)}
+              onClick={() => {
+                if (!item.disabled) {
+                  onToggle(item.key);
+                }
+              }}
               type="button"
             >
               {item.swatch ? <LegendSwatch color={item.swatch} testId={item.swatchTestId} /> : null}

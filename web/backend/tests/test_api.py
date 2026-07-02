@@ -625,6 +625,7 @@ def test_AC_6_calendar_topics_and_resurface_payloads_do_not_include_raw_text(tmp
         {
             "period": "2026-W25",
             "counts": {"learning": 1, "reflection": 1},
+            "total": 1,
         }
     ]
     assert resurface["day"]["summary"] == "A processed summary of the day."

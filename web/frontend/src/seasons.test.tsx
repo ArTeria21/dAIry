@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { moodPalette, topicHighlightColor, topicMutedColor } from "./design/palettes";
+import { moodPalette } from "./design/palettes";
+import { calendarHeatmapMetrics, noMoodColor } from "./seasons/CalendarHeatmap";
+import { buildTopicStreamModel } from "./seasons/TopicsStream";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -52,18 +54,81 @@ const calendarPayload = {
       raw_text: "another private transcript",
       note_path: "/Users/artem/Vault/2026/02/2026-02-14.md",
     },
+    {
+      date: "2026-02-16",
+      weekday: "MONDAY",
+      is_weekend: false,
+      season: "winter",
+      mood: null,
+      mood_confidence: null,
+      summary: "Vault-only day without mood.",
+      facts: {},
+      raw_text: "unprocessed private transcript",
+      note_path: "/Users/artem/Vault/2026/02/2026-02-16.md",
+    },
   ],
 };
 
 const timelinePayload = {
   buckets: [
-    { period: "2026-W07", counts: { work: 2, home: 1 } },
-    { period: "2026-W08", counts: { work: 1, home: 3 } },
+    {
+      period: "2026-W07",
+      total: 6,
+      counts: {
+        work: 3,
+        home: 1,
+        reflection: 5,
+        learning: 2,
+        health: 1,
+        travel: 1,
+        admin: 1,
+        creative: 1,
+        friends: 1,
+        finance: 1,
+      },
+    },
+    {
+      period: "2026-W08",
+      total: 5,
+      counts: {
+        work: 1,
+        home: 3,
+        reflection: 2,
+        learning: 1,
+        health: 1,
+        travel: 1,
+        admin: 1,
+        creative: 1,
+        friends: 1,
+      },
+    },
+    {
+      period: "2026-W09",
+      total: 4,
+      counts: {
+        work: 2,
+        home: 1,
+        learning: 1,
+        health: 1,
+        travel: 1,
+        admin: 1,
+        creative: 1,
+        friends: 1,
+        finance: 1,
+      },
+    },
+  ],
+};
+
+const shortTimelinePayload = {
+  buckets: [
+    { period: "2026-W07", total: 2, counts: { work: 2, reflection: 1 } },
+    { period: "2026-W08", total: 1, counts: { home: 1 } },
   ],
 };
 
 const mapPayload = {
-  signature: "notes:2:max:2",
+  signature: "notes:3:max:2",
   computed_at: "2026-06-17T08:00:00Z",
   points: [
     {
@@ -98,7 +163,7 @@ function installFetchMock({
   map = mapPayload,
 }: {
   calendar?: typeof calendarPayload;
-  timeline?: typeof timelinePayload;
+  timeline?: typeof timelinePayload | typeof shortTimelinePayload | { buckets: [] };
   map?: typeof mapPayload;
 } = {}) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -127,7 +192,11 @@ async function renderAuthenticatedSeasons() {
   return screen.findByRole("heading", { name: "SEASONS" });
 }
 
-describe("Phase 4 seasons view", () => {
+function fillOpacity(element: Element): number {
+  return Number(element.getAttribute("fill-opacity"));
+}
+
+describe("Sprint 5 seasons view", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     window.location.hash = "";
@@ -137,22 +206,31 @@ describe("Phase 4 seasons view", () => {
     window.location.hash = "";
   });
 
-  it("AC-1: renders calendar day cells with the shared mood palette colors", async () => {
+  it("renders a real mood heatmap with empty cells, mood colors, and confidence opacity", async () => {
     installFetchMock();
 
     await renderAuthenticatedSeasons();
 
-    const calmDay = await screen.findByRole("button", { name: "2026-02-13" });
-    const joyDay = screen.getByRole("button", { name: "2026-02-14" });
-    expect(calmDay.style.getPropertyValue("--day-color")).toBe(moodPalette.calm);
-    expect(joyDay.style.getPropertyValue("--day-color")).toBe(moodPalette.joy);
+    const calmDay = await screen.findByRole("button", { name: "2026-02-13 · CALM" });
+    const joyDay = screen.getByRole("button", { name: "2026-02-14 · JOY" });
+    const noMoodDay = screen.getByRole("button", { name: "2026-02-16 · NO MOOD" });
+    const emptyDay = screen.getByTestId("calendar-cell-2026-02-15");
+
+    expect(calmDay).toHaveAttribute("fill", moodPalette.calm);
+    expect(fillOpacity(calmDay)).toBeCloseTo(0.883);
+    expect(joyDay).toHaveAttribute("fill", moodPalette.joy);
+    expect(noMoodDay).toHaveAttribute("fill", noMoodColor);
+    expect(fillOpacity(noMoodDay)).toBeCloseTo(0.675);
+    expect(emptyDay).toHaveAttribute("fill", "transparent");
+    expect(emptyDay).not.toHaveAttribute("role");
+    expect(screen.getByTestId("calendar-year-2026")).toBeInTheDocument();
   });
 
-  it("AC-2: clicking a day renders its serif summary and fact chips", async () => {
+  it("clicking a heatmap day renders its serif summary, facts, and reader link", async () => {
     installFetchMock();
 
     await renderAuthenticatedSeasons();
-    await userEvent.click(await screen.findByRole("button", { name: "2026-02-13" }));
+    await userEvent.click(await screen.findByRole("button", { name: "2026-02-13 · CALM" }));
     const panel = await screen.findByRole("complementary", { name: "DAY 2026-02-13 DETAILS" });
 
     expect(within(panel).getByText("A focused day of prototyping.")).toHaveClass(
@@ -167,45 +245,55 @@ describe("Phase 4 seasons view", () => {
     expect(within(panel).getByText("DEEP FOCUS YES")).toBeInTheDocument();
   });
 
-  it("AC-3: renders topic-frequency sparklines with mono labels", async () => {
+  it("filters heatmap days by selected mood and selected topic together", async () => {
+    installFetchMock();
+
+    await renderAuthenticatedSeasons();
+    await userEvent.click(await screen.findByRole("button", { name: "CALM" }));
+    await userEvent.click(screen.getByRole("button", { name: "WORK" }));
+
+    expect(fillOpacity(screen.getByRole("button", { name: "2026-02-13 · CALM" }))).toBeCloseTo(0.883);
+    expect(fillOpacity(screen.getByRole("button", { name: "2026-02-14 · JOY" }))).toBe(0.15);
+    expect(fillOpacity(screen.getByRole("button", { name: "2026-02-16 · NO MOOD" }))).toBe(0.15);
+  });
+
+  it("renders a d3-shape stream graph with top topics, OTHER, and no reflection layer", async () => {
     installFetchMock();
 
     await renderAuthenticatedSeasons();
 
-    expect(await screen.findByText("WORK")).toHaveClass("font-plexmono");
-    expect(screen.getByText("HOME")).toHaveClass("font-plexmono");
-    expect(screen.getByTestId("topic-sparkline-work")).toHaveAttribute("stroke", "#0d6ea5");
-    expect(screen.getByTestId("topic-sparkline-home")).toHaveAttribute("stroke", "#0d6ea5");
+    expect(await screen.findByTestId("topic-stream-layer-work")).toBeInTheDocument();
+    expect(screen.getByTestId("topic-stream-layer-OTHER")).toBeInTheDocument();
+    expect(screen.queryByTestId("topic-stream-layer-reflection")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "OTHER" })).toBeDisabled();
+    expect(screen.queryAllByTestId(/^topic-sparkline-/)).toHaveLength(0);
   });
 
-  it("AC-4: selecting a topic highlights its sparkline and fades nonmatching calendar days", async () => {
+  it("selecting a stream topic highlights the layer and filters the calendar", async () => {
     installFetchMock();
 
     await renderAuthenticatedSeasons();
     await userEvent.click(await screen.findByRole("button", { name: "WORK" }));
 
-    expect(screen.getByTestId("topic-sparkline-work")).toHaveAttribute("stroke", topicHighlightColor);
-    expect(screen.getByRole("button", { name: "2026-02-13" }).style.getPropertyValue("--day-color")).toBe(
-      moodPalette.calm,
-    );
-    expect(screen.getByRole("button", { name: "2026-02-14" }).style.getPropertyValue("--day-color")).toBe(
-      topicMutedColor,
-    );
+    expect(screen.getByTestId("topic-stream-layer-work")).toHaveAttribute("stroke", "#181818");
+    expect(screen.getByTestId("topic-stream-layer-home")).toHaveAttribute("fill-opacity", "0.28");
+    expect(fillOpacity(screen.getByRole("button", { name: "2026-02-13 · CALM" }))).toBeCloseTo(0.883);
+    expect(fillOpacity(screen.getByRole("button", { name: "2026-02-14 · JOY" }))).toBe(0.15);
   });
 
-  it("AC-7: does not render raw text, note paths, or filesystem-looking paths from calendar responses", async () => {
-    installFetchMock();
+  it("keeps no-leak guarantees and handles short or empty topic/calendar responses", async () => {
+    installFetchMock({ timeline: shortTimelinePayload });
 
     await renderAuthenticatedSeasons();
 
-    expect(await screen.findByRole("button", { name: "2026-02-13" })).toBeInTheDocument();
+    expect(await screen.findByText("NOT ENOUGH DATA")).toBeInTheDocument();
     expect(screen.queryByText("private transcript should never render")).not.toBeInTheDocument();
     expect(screen.queryByText("another private transcript")).not.toBeInTheDocument();
     expect(screen.queryByText(/Users\/artem/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Vault/)).not.toBeInTheDocument();
   });
 
-  it("EC-1/EC-2: renders empty calendar and empty topic states", async () => {
+  it("renders empty calendar and empty topic states", async () => {
     installFetchMock({
       calendar: { days: [] },
       timeline: { buckets: [] },
@@ -215,8 +303,19 @@ describe("Phase 4 seasons view", () => {
     await renderAuthenticatedSeasons();
 
     expect(await screen.findByText("NO DAYS TO SHOW")).toBeInTheDocument();
-    expect(screen.queryAllByRole("button", { name: /^\d{4}-\d{2}-\d{2}$/ })).toHaveLength(0);
     expect(screen.getByText("NO TOPIC SIGNAL")).toBeInTheDocument();
-    expect(screen.queryByTestId(/^topic-sparkline-/)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^topic-stream-layer-/)).toHaveLength(0);
+  });
+
+  it("keeps heatmap cell sizing within the 1200px layout budget", () => {
+    expect(calendarHeatmapMetrics.cellSize).toBeLessThanOrEqual(14);
+    expect(calendarHeatmapMetrics.cellGap).toBeLessThanOrEqual(3);
+  });
+
+  it("treats zero-total topic buckets as zero share", () => {
+    const model = buildTopicStreamModel([{ period: "2026-W07", total: 0, counts: { work: 3 } }]);
+
+    expect(model.series.map((series) => series.key)).toEqual(["work"]);
+    expect(model.data[0].shares.work).toBe(0);
   });
 });

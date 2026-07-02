@@ -63,3 +63,10 @@
 **Отклонения от спеки:** нет.
 **Грабли/наблюдения:** Схема id для edit lookup совпала с Sprint 3: `YYYY-MM-DDTHH:MM` и `#n` для дублей, поэтому replace-функция ищет конкретный heading по `note_id`. Git flow edit API: `prepare_for_write` → read/replace/write → `commit_and_push`; `GitPushError` считается локальным успехом и только логируется. Root `uv sync` чистит backend-only packages (`umap`/`hdbscan`), поэтому root pytest теперь явно ограничен `testpaths = ["tests"]`; backend tests остаются отдельным gate из `web/backend`. Существующий `.gitignore` игнорирует любой каталог `journal/`, из-за чего frontend journal-компоненты нужно было добавить через `git add -f`.
 **Backlog-наблюдения:** Web save сейчас сообщает только общие статусы; если понадобится UX точнее, backend уже пробрасывает HTTP-классы ошибок, и текст можно уточнить без изменения bot API. Стоит сузить ignore-rule `journal/`, чтобы будущие файлы под `web/frontend/src/journal/` не требовали force-add.
+
+## [2026-07-02] Sprint 5 — done
+**Агент:** GPT-5 Codex.
+**Сделано:** Seasons заменён на SVG `CalendarHeatmap` с full-year недельной сеткой, mood-легендой/фильтром и DayPanel; `/api/topics/timeline` добавляет weekly `total`; старые 23 sparkline заменены на `TopicsStream` через прямой `d3-shape` import, top-8 + OTHER и общий topic-фильтр. Зависимость `d3` заменена на `d3-shape`, тесты обновлены под heatmap/stream/no-leak/edge-cases.
+**Отклонения от спеки:** нет.
+**Грабли/наблюдения:** S5-6 решён по спеке: одновременно допустимы orange-обводки активного mood-чипа, активного topic-чипа и выбранной day-cell; это осознанное уточнение к глобальному G9 для Seasons. `Legend` получил `disabled` items для некликабельного OTHER. Calendar layout строит блоки по полным календарным годам от недели с 1 января до недели с 31 декабря; хвосты соседних лет пустые и некликабельные.
+**Backlog-наблюдения:** Stream tooltip сейчас реализован как SVG `title` на слой с неделей максимального count; если нужен настоящий per-week hover, стоит добавить pointer-position hit testing поверх stacked data.
