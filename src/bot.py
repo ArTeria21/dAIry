@@ -9,11 +9,9 @@ from dairy_bot.config import Settings
 from dairy_bot.handlers.journal import router as journal_router
 from dairy_bot.middlewares.auth import AuthMiddleware
 from dairy_bot.services.background_reconciler import (
-    nightly_enrichment_loop,
     periodic_background_loop,
     reconcile_background_once,
     reconcile_changed_enrichment,
-    reconcile_nightly_enrichment_once,
     start_background_reconciliation,
     stop_background_reconciliation,
 )
@@ -57,27 +55,12 @@ async def _reconcile_changed_enrichment(
     )
 
 
-async def _reconcile_nightly_enrichment_once(settings: Settings) -> list[Path]:
-    return await reconcile_nightly_enrichment_once(
-        settings,
-        client_factory=build_enrichment_client,
-    )
-
-
 async def _periodic_background_loop(settings: Settings, git_service: GitService) -> None:
     await periodic_background_loop(
         settings,
         git_service,
         client_factory=build_enrichment_client,
         reconcile_toc_func=reconcile_toc,
-    )
-
-
-async def _nightly_enrichment_loop(settings: Settings, git_service: GitService) -> None:
-    await nightly_enrichment_loop(
-        settings,
-        git_service,
-        client_factory=build_enrichment_client,
     )
 
 

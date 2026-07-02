@@ -246,11 +246,12 @@ def discover_daily_notes(journal_dir: Path) -> list[Path]:
     return sorted(paths)
 
 
-async def file_content_hash(path: Path) -> str:
-    try:
-        return _content_hash(await read_text(path))
-    except FileNotFoundError:
-        return ""
+def entries_fingerprint(content: str, note_path: Path) -> str:
+    """Hash only the entry texts, so frontmatter/enrichment rewrites don't count."""
+    entries = parse_daily_entries(content, note_path)
+    return _content_hash(
+        "\n".join(f"{entry.entry_id}:{entry.content_hash}" for entry in entries)
+    )
 
 
 def _render_note_enrichments(

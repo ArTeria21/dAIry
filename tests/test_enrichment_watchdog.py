@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -157,24 +158,130 @@ def test_AC_2_watchdog_skips_unchanged_notes_without_llm_calls(tmp_path, monkeyp
     assert client.day_calls == 1
 
 
-def test_AC_3_nightly_day_level_recomputes_only_changed_days(tmp_path, monkeypatch):
+def _setup(tmp_path, monkeypatch):
+    settings = FakeSettings(tmp_path)
+    git = FakeGit()
+    client = FakeClient()
+
+    async def fake_reconcile_toc(journal_dir, settings, target_paths=None):
+        return []
+
+    monkeypatch.setattr(bot_module, "build_enrichment_client", lambda settings: client)
+    monkeypatch.setattr(bot_module, "reconcile_toc", fake_reconcile_toc)
+    return settings, git, client
+
+
+def _reconcile(settings, git):
+    run(
+        bot_module._reconcile_background_once(
+            settings,
+            git,
+            "Test",
+            now=datetime(2026, 6, 16, 12, 0, tzinfo=TZ),
+        )
+    )
+
+
+def test_AC_3_summary_rewrite_alone_does_not_retrigger_enrichment(
+    tmp_path, monkeypatch
+):
     path = run(
         storage.append_entry(
             tmp_path,
-            "Nightly day text",
-            moment=datetime(2026, 6, 15, 9, 0, tzinfo=TZ),
+            "Old-day text",
+            moment=datetime(2026, 6, 13, 9, 0, tzinfo=TZ),
             timezone=TZ,
         )
     )
-    settings = FakeSettings(tmp_path)
-    client = FakeClient()
-    monkeypatch.setattr(bot_module, "build_enrichment_client", lambda settings: client)
+    settings, git, client = _setup(tmp_path, monkeypatch)
 
-    run(bot_module._reconcile_nightly_enrichment_once(settings))
-    run(bot_module._reconcile_nightly_enrichment_once(settings))
+    _reconcile(settings, git)
+    rewritten = read_text(path).replace(
+        "A reflective changed day.", "A differently phrased day."
+    )
+    path.write_text(rewritten, encoding="utf-8")
+    git.committed_paths = None
 
-    path.write_text(read_text(path) + "\nManual append\n", encoding="utf-8")
+    _reconcile(settings, git)
 
-    run(bot_module._reconcile_nightly_enrichment_once(settings))
+    assert client.note_calls == 1
+    assert client.day_calls == 1
+    assert git.committed_paths is None
 
+
+def test_AC_4_manual_entry_edit_retriggers_note_and_day_enrichment(
+    tmp_path, monkeypatch
+):
+    path = run(
+        storage.append_entry(
+            tmp_path,
+            "Original entry text",
+            moment=datetime(2026, 6, 13, 9, 0, tzinfo=TZ),
+            timezone=TZ,
+        )
+    )
+    settings, git, client = _setup(tmp_path, monkeypatch)
+
+    _reconcile(settings, git)
+    edited = read_text(path).replace("Original entry text", "Edited entry text")
+    path.write_text(edited, encoding="utf-8")
+
+    _reconcile(settings, git)
+
+    assert client.note_calls == 2
     assert client.day_calls == 2
+
+
+def test_AC_5_entry_deletion_retriggers_day_enrichment_only(tmp_path, monkeypatch):
+    run(
+        storage.append_entry(
+            tmp_path,
+            "First entry",
+            moment=datetime(2026, 6, 13, 9, 0, tzinfo=TZ),
+            timezone=TZ,
+        )
+    )
+    path = run(
+        storage.append_entry(
+            tmp_path,
+            "Second entry",
+            moment=datetime(2026, 6, 13, 10, 0, tzinfo=TZ),
+            timezone=TZ,
+        )
+    )
+    settings, git, client = _setup(tmp_path, monkeypatch)
+
+    _reconcile(settings, git)
+    content = read_text(path)
+    truncated = content[: content.index("## 10:00")].rstrip() + "\n"
+    path.write_text(truncated, encoding="utf-8")
+
+    _reconcile(settings, git)
+
+    assert client.note_calls == 2
+    assert client.day_calls == 2
+
+
+def test_AC_6_missing_watchdog_state_does_not_reenrich_existing_vault(
+    tmp_path, monkeypatch
+):
+    run(
+        storage.append_entry(
+            tmp_path,
+            "Already enriched text",
+            moment=datetime(2026, 6, 13, 9, 0, tzinfo=TZ),
+            timezone=TZ,
+        )
+    )
+    settings, git, client = _setup(tmp_path, monkeypatch)
+
+    _reconcile(settings, git)
+    with sqlite3.connect(settings.enrichment_db_path) as conn:
+        conn.execute("DELETE FROM file_state")
+    git.committed_paths = None
+
+    _reconcile(settings, git)
+
+    assert client.note_calls == 1
+    assert client.day_calls == 1
+    assert git.committed_paths is None

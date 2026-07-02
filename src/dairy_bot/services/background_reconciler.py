@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -15,7 +15,8 @@ from dairy_bot.services.enrichment import (
     discover_daily_notes,
     enrich_daily_note_notes,
     enrich_day_summary,
-    file_content_hash,
+    entries_fingerprint,
+    read_text,
 )
 from dairy_bot.services.enrichment_client import build_enrichment_client
 from dairy_bot.services.enrichment_db import EnrichmentStore
@@ -25,8 +26,7 @@ from dairy_bot.services.toc_service import reconcile_toc
 
 logger = logging.getLogger(__name__)
 
-WATCHDOG_STATE_KEY = "watchdog"
-NIGHTLY_DAY_STATE_KEY = "nightly_day"
+WATCHDOG_STATE_KEY = "watchdog_entries"
 
 ClientFactory = Callable[[Settings], NoteClient | DayClient]
 TocReconciler = Callable[..., Awaitable[list[Path]]]
@@ -112,8 +112,10 @@ async def reconcile_changed_enrichment(
             if note_date == today:
                 continue
             rel_path = str(note_path.relative_to(settings.journal_dir))
-            before_hash = await file_content_hash(note_path)
-            if store.get_file_hash(rel_path, WATCHDOG_STATE_KEY) == before_hash:
+            content = await read_text(note_path)
+            fingerprint = entries_fingerprint(content, note_path)
+            stored = store.get_file_hash(rel_path, WATCHDOG_STATE_KEY)
+            if stored == fingerprint:
                 continue
             try:
                 note_changed = await enrich_daily_note_notes(
@@ -126,65 +128,38 @@ async def reconcile_changed_enrichment(
                     exc_info=True,
                 )
                 continue
-            try:
-                day_changed = await enrich_day_summary(
-                    note_path,
-                    settings.journal_dir,
-                    client,
-                    store,
-                    timezone=settings.timezone,
-                )
-            except DayEnrichmentFailure:
-                logger.warning(
-                    "Skipping failed day enrichment for %s",
-                    note_path,
-                    exc_info=True,
-                )
-                continue
-            final_hash = await file_content_hash(note_path)
-            store.set_file_hash(rel_path, WATCHDOG_STATE_KEY, final_hash)
-            if note_changed or day_changed or final_hash != before_hash:
-                changed_paths.append(note_path)
-    finally:
-        await _close_client(client)
-    return changed_paths
-
-
-async def reconcile_nightly_enrichment_once(
-    settings: Settings,
-    *,
-    client_factory: ClientFactory = build_enrichment_client,
-) -> list[Path]:
-    if not settings.enrichment_enabled:
-        return []
-
-    store = EnrichmentStore(settings.enrichment_db_path)
-    client = client_factory(settings)
-    changed_paths: list[Path] = []
-    try:
-        for note_path in discover_daily_notes(settings.journal_dir):
-            rel_path = str(note_path.relative_to(settings.journal_dir))
-            before_hash = await file_content_hash(note_path)
-            if store.get_file_hash(rel_path, NIGHTLY_DAY_STATE_KEY) == before_hash:
-                continue
-            try:
-                changed = await enrich_day_summary(
-                    note_path,
-                    settings.journal_dir,
-                    client,
-                    store,
-                    timezone=settings.timezone,
-                )
-            except DayEnrichmentFailure:
-                logger.warning(
-                    "Skipping failed nightly day enrichment for %s",
-                    note_path,
-                    exc_info=True,
-                )
-                continue
-            final_hash = await file_content_hash(note_path)
-            store.set_file_hash(rel_path, NIGHTLY_DAY_STATE_KEY, final_hash)
-            if changed:
+            # Recompute the day summary only when entries actually changed.
+            # On the first pass over a note (no stored fingerprint) skip the
+            # LLM call if the day is already enriched, so existing vaults are
+            # not rewritten wholesale.
+            day_changed = False
+            if (
+                stored is not None
+                or note_changed
+                or store.get_day(note_path.stem) is None
+            ):
+                try:
+                    day_changed = await enrich_day_summary(
+                        note_path,
+                        settings.journal_dir,
+                        client,
+                        store,
+                        timezone=settings.timezone,
+                    )
+                except DayEnrichmentFailure:
+                    logger.warning(
+                        "Skipping failed day enrichment for %s",
+                        note_path,
+                        exc_info=True,
+                    )
+                    continue
+            final_content = await read_text(note_path)
+            store.set_file_hash(
+                rel_path,
+                WATCHDOG_STATE_KEY,
+                entries_fingerprint(final_content, note_path),
+            )
+            if note_changed or day_changed:
                 changed_paths.append(note_path)
     finally:
         await _close_client(client)
@@ -211,32 +186,6 @@ async def periodic_background_loop(
         )
 
 
-async def nightly_enrichment_loop(
-    settings: Settings,
-    git_service: GitService,
-    *,
-    client_factory: ClientFactory = build_enrichment_client,
-) -> None:
-    """Run quiet day-level enrichment around 03:00 in the configured timezone."""
-    while True:
-        now = datetime.now(settings.timezone)
-        next_run = now.replace(hour=3, minute=0, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        await asyncio.sleep((next_run - now).total_seconds())
-        async with get_journal_lock():
-            try:
-                await asyncio.to_thread(git_service.prepare_for_write)
-                changed_paths = await reconcile_nightly_enrichment_once(
-                    settings,
-                    client_factory=client_factory,
-                )
-                if changed_paths:
-                    await asyncio.to_thread(git_service.commit_and_push, changed_paths)
-            except Exception:
-                logger.exception("Nightly enrichment failed")
-
-
 async def start_background_reconciliation(
     settings: Settings,
     git_service: GitService,
@@ -261,14 +210,6 @@ async def start_background_reconciliation(
                     git_service,
                     client_factory=client_factory,
                     reconcile_toc_func=reconcile_toc_func,
-                )
-            )
-        )
-    if settings.enrichment_enabled:
-        tasks.append(
-            asyncio.create_task(
-                nightly_enrichment_loop(
-                    settings, git_service, client_factory=client_factory
                 )
             )
         )
