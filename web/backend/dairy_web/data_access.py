@@ -56,6 +56,21 @@ class EnrichmentReadStore:
             rows = conn.execute("SELECT * FROM notes ORDER BY id").fetchall()
         return [_note_from_row(row) for row in rows]
 
+    def note_content_hashes(self) -> dict[str, str]:
+        with self.connect() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT id, content_hash FROM note_entry_state"
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such table" in str(exc).lower():
+                    return {}
+                raise
+        return {
+            str(row["id"]): "" if row["content_hash"] is None else str(row["content_hash"])
+            for row in rows
+        }
+
     def get_note(self, note_id: str) -> NoteRecord | None:
         with self.connect() as conn:
             row = conn.execute(

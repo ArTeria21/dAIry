@@ -2,13 +2,14 @@
 name = "dairy-layer3-backend"
 version = "0.1.0"
 description = "Read-only analytics API for the dAIry enriched journal."
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "argon2-cffi>=25.1.0",
     "fastapi>=0.116.0",
     "hdbscan>=0.8.40",
     "httpx>=0.28.0",
     "itsdangerous>=2.2.0",
+    "numba>=0.62",
     "numpy>=2.3.0",
     "openai>=1.52.0",
     "pydantic>=2.11.10",
@@ -20,6 +21,11 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: integration tests that run real UMAP/HDBSCAN",
 ]
 
 [build-system]

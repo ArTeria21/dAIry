@@ -6,7 +6,14 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from dairy_web.analysis import ClusterSummary, MapPoint, MapSnapshot, RebuildResult
+from dairy_web.analysis import (
+    AnalysisCache,
+    AnalysisService,
+    ClusterSummary,
+    MapPoint,
+    MapSnapshot,
+    RebuildResult,
+)
 from dairy_web.app import create_app
 from dairy_web.auth import AuthService, AuthSettings, SessionSigner
 from dairy_web.data_access import DayRecord, NoteRecord
@@ -25,6 +32,9 @@ class FakeStore:
 
     def list_notes(self) -> list[NoteRecord]:
         return list(self.notes)
+
+    def note_content_hashes(self) -> dict[str, str]:
+        return {}
 
     def get_note(self, note_id: str) -> NoteRecord | None:
         return next((note for note in self.notes if note.id == note_id), None)
@@ -51,7 +61,31 @@ class FakeAnalysis:
             computed_at="2026-06-17T12:30:00+00:00",
             n_points=1,
             n_clusters=1,
+            n_noise=0,
         )
+
+
+class FakeProjector:
+    def project(self, vectors):
+        return [(float(index), float(index + 10)) for index, _ in enumerate(vectors)]
+
+
+class FakeReducer:
+    def reduce(self, vectors):
+        return [
+            [float(index + value) for value in range(10)]
+            for index, _ in enumerate(vectors)
+        ]
+
+
+class FakeClusterer:
+    def cluster(self, vectors):
+        return [5 for _ in vectors]
+
+
+class FailingLabeler:
+    def label_clusters(self, clusters):
+        raise RuntimeError("labeler unavailable")
 
 
 def make_note(note_id: str = "2026-06-16T21:55") -> NoteRecord:
@@ -69,7 +103,12 @@ def make_note(note_id: str = "2026-06-16T21:55") -> NoteRecord:
     )
 
 
-def make_day(day: str = "2026-06-16", *, mood: str = "calm", confidence: float = 0.82) -> DayRecord:
+def make_day(
+    day: str = "2026-06-16",
+    *,
+    mood: str = "calm",
+    confidence: float = 0.82,
+) -> DayRecord:
     return DayRecord(
         date=day,
         summary="A processed summary of the day.",
@@ -131,6 +170,7 @@ def build_client(tmp_path: Path) -> tuple[TestClient, FakeAnalysis]:
                 dominant_topics=["learning"],
             )
         ],
+        n_noise=0,
     )
     analysis = FakeAnalysis(snapshot)
     auth = AuthService(
@@ -194,6 +234,7 @@ def test_AC_6_map_payload_contains_gist_but_never_raw_text_and_rebuild_is_protec
     rebuild = client.post("/api/rebuild").json()
 
     assert payload["signature"] == "sig-1"
+    assert payload["n_noise"] == 0
     assert payload["points"][0]["gist"] == "The user reflected on language practice."
     assert "raw_text" not in json.dumps(payload)
     assert payload["clusters"] == [
@@ -209,8 +250,52 @@ def test_AC_6_map_payload_contains_gist_but_never_raw_text_and_rebuild_is_protec
         "computed_at": "2026-06-17T12:30:00+00:00",
         "n_points": 1,
         "n_clusters": 1,
+        "n_noise": 0,
     }
     assert analysis.rebuild_calls == 1
+
+
+def test_AC_3_rebuild_endpoint_survives_labeler_failure_with_static_labels(tmp_path):
+    note_list = [
+        make_note(f"2026-06-{index + 1:02d}T10:00") for index in range(15)
+    ]
+    store = FakeStore(notes=note_list, days=[make_day()])
+    analysis = AnalysisService(
+        store=store,
+        cache=AnalysisCache(tmp_path / "analysis_cache.sqlite3"),
+        projector=FakeProjector(),
+        reducer=FakeReducer(),
+        clusterer=FakeClusterer(),
+        labeler=FailingLabeler(),
+    )
+    auth = AuthService(
+        settings=AuthSettings(
+            username="artem",
+            password_argon2="argon2-hash",
+            session_secret="test-secret",
+            rate_limit_attempts=3,
+            rate_limit_window_seconds=60,
+        ),
+        verifier=FakeVerifier(),
+        signer=SessionSigner("test-secret"),
+    )
+    app = create_app(
+        store=store,
+        analysis=analysis,
+        auth=auth,
+        vault_dir=tmp_path,
+        cookie_secure=True,
+    )
+    client = TestClient(app, base_url="https://testserver")
+
+    login(client)
+    rebuild = client.post("/api/rebuild")
+    payload = client.get("/api/map").json()
+
+    assert rebuild.status_code == 200
+    assert rebuild.json()["n_clusters"] == 1
+    assert payload["clusters"][0]["label"]
+    assert payload["n_noise"] == 0
 
 
 def test_AC_6_note_detail_is_the_only_payload_with_raw_text_and_missing_note_is_404(tmp_path):

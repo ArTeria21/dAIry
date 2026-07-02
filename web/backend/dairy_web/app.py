@@ -122,6 +122,7 @@ def create_app(
             "computed_at": snapshot.computed_at,
             "points": [asdict(point) for point in snapshot.points],
             "clusters": [asdict(cluster) for cluster in snapshot.clusters],
+            "n_noise": snapshot.n_noise,
         }
 
     @app.get("/api/notes/{note_id}")

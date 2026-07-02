@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 from collections import Counter, defaultdict
@@ -11,6 +12,18 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 from dairy_web.data_access import NoteRecord
+
+
+LOGGER = logging.getLogger(__name__)
+
+CLUSTER_REDUCTION_DIMENSIONS = 10
+CLUSTER_REDUCTION_NEIGHBORS = 15
+MIN_NOTES_FOR_CLUSTERING = 15
+OPENROUTER_LABEL_TIMEOUT_SECONDS = 20.0
+# Revisit these once the corpus grows beyond roughly 1000 notes.
+HDBSCAN_MIN_CLUSTER_SIZE = 6
+HDBSCAN_MIN_SAMPLES = 3
+HDBSCAN_CLUSTER_SELECTION_METHOD = "eom"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +53,7 @@ class MapSnapshot:
     computed_at: str
     points: list[MapPoint]
     clusters: list[ClusterSummary]
+    n_noise: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,14 +62,21 @@ class RebuildResult:
     computed_at: str
     n_points: int
     n_clusters: int
+    n_noise: int
 
 
 class NoteStore(Protocol):
     def list_notes(self) -> list[NoteRecord]: ...
 
+    def note_content_hashes(self) -> dict[str, str]: ...
+
 
 class Projector(Protocol):
     def project(self, vectors: list[list[float]]) -> list[tuple[float, float]]: ...
+
+
+class Reducer(Protocol):
+    def reduce(self, vectors: list[list[float]]) -> list[list[float]]: ...
 
 
 class Clusterer(Protocol):
@@ -77,7 +98,7 @@ class AnalysisCache:
     def load_snapshot(self, signature: str) -> MapSnapshot | None:
         with self._connect() as conn:
             meta = conn.execute(
-                "SELECT signature, computed_at FROM metadata WHERE id = 1"
+                "SELECT signature, computed_at, n_noise FROM metadata WHERE id = 1"
             ).fetchone()
             if meta is None or meta["signature"] != signature:
                 return None
@@ -92,6 +113,7 @@ class AnalysisCache:
             computed_at=str(meta["computed_at"]),
             points=[_point_from_row(row) for row in point_rows],
             clusters=[_cluster_from_row(row) for row in cluster_rows],
+            n_noise=int(meta["n_noise"]),
         )
 
     def save_snapshot(self, snapshot: MapSnapshot) -> None:
@@ -101,10 +123,10 @@ class AnalysisCache:
             conn.execute("DELETE FROM metadata")
             conn.execute(
                 """
-                INSERT INTO metadata (id, signature, computed_at)
-                VALUES (1, ?, ?)
+                INSERT INTO metadata (id, signature, computed_at, n_noise)
+                VALUES (1, ?, ?, ?)
                 """,
-                (snapshot.signature, snapshot.computed_at),
+                (snapshot.signature, snapshot.computed_at, snapshot.n_noise),
             )
             conn.executemany(
                 """
@@ -153,12 +175,21 @@ class AnalysisCache:
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
+            if self._metadata_schema_is_stale(conn):
+                conn.executescript(
+                    """
+                    DROP TABLE IF EXISTS points;
+                    DROP TABLE IF EXISTS clusters;
+                    DROP TABLE IF EXISTS metadata;
+                    """
+                )
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS metadata (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     signature TEXT NOT NULL,
-                    computed_at TEXT NOT NULL
+                    computed_at TEXT NOT NULL,
+                    n_noise INTEGER NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS points (
@@ -182,6 +213,12 @@ class AnalysisCache:
                 """
             )
 
+    def _metadata_schema_is_stale(self, conn: sqlite3.Connection) -> bool:
+        columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(metadata)")
+        }
+        return bool(columns) and "n_noise" not in columns
+
 
 class AnalysisService:
     def __init__(
@@ -190,6 +227,7 @@ class AnalysisService:
         store: NoteStore,
         cache: AnalysisCache,
         projector: Projector | None = None,
+        reducer: Reducer | None = None,
         clusterer: Clusterer | None = None,
         labeler: ClusterLabeler | None = None,
         now: Callable[[], datetime] | None = None,
@@ -197,13 +235,14 @@ class AnalysisService:
         self.store = store
         self.cache = cache
         self.projector = projector or UmapProjector()
+        self.reducer = reducer or UmapReducer()
         self.clusterer = clusterer or HdbscanClusterer()
         self.labeler = labeler or StaticClusterLabeler()
         self.now = now or (lambda: datetime.now(timezone.utc))
 
     def get_map(self) -> MapSnapshot:
         notes = self.store.list_notes()
-        signature = note_set_signature(notes)
+        signature = note_set_signature(notes, self.store.note_content_hashes())
         cached = self.cache.load_snapshot(signature)
         if cached is not None:
             return cached
@@ -211,12 +250,15 @@ class AnalysisService:
 
     def rebuild(self) -> RebuildResult:
         notes = self.store.list_notes()
-        snapshot = self._recompute(notes, note_set_signature(notes))
+        snapshot = self._recompute(
+            notes, note_set_signature(notes, self.store.note_content_hashes())
+        )
         return RebuildResult(
             signature=snapshot.signature,
             computed_at=snapshot.computed_at,
             n_points=len(snapshot.points),
             n_clusters=len(snapshot.clusters),
+            n_noise=snapshot.n_noise,
         )
 
     def _recompute(self, notes: list[NoteRecord], signature: str) -> MapSnapshot:
@@ -227,20 +269,26 @@ class AnalysisService:
                 computed_at=computed_at,
                 points=[],
                 clusters=[],
+                n_noise=0,
             )
             self.cache.save_snapshot(snapshot)
             return snapshot
 
         vectors = _embedding_matrix(notes)
-        coordinates = self.projector.project(vectors)
-        labels = self.clusterer.cluster(vectors)
+        coordinates = (
+            [(0.5, 0.5)] if len(notes) == 1 else self.projector.project(vectors)
+        )
+        if len(notes) < MIN_NOTES_FOR_CLUSTERING:
+            labels = [-1] * len(notes)
+        else:
+            reduced_vectors = self.reducer.reduce(vectors)
+            labels = self.clusterer.cluster(reduced_vectors)
         if len(coordinates) != len(notes) or len(labels) != len(notes):
             raise ValueError("Projection and cluster lengths must match note count")
 
+        n_noise = sum(1 for label in labels if int(label) == -1)
         clusters_by_id = _clusters_by_id(notes, labels)
-        cluster_labels = (
-            self.labeler.label_clusters(clusters_by_id) if clusters_by_id else {}
-        )
+        cluster_labels = _label_clusters_with_fallback(self.labeler, clusters_by_id)
         points = [
             MapPoint(
                 id=note.id,
@@ -269,6 +317,7 @@ class AnalysisService:
             computed_at=computed_at,
             points=points,
             clusters=clusters,
+            n_noise=n_noise,
         )
         self.cache.save_snapshot(snapshot)
         return snapshot
@@ -278,24 +327,43 @@ class UmapProjector:
     def project(self, vectors: list[list[float]]) -> list[tuple[float, float]]:
         import umap
 
-        model = umap.UMAP(n_components=2, random_state=42)
+        model = umap.UMAP(n_components=2, metric="cosine", random_state=42)
         coordinates = model.fit_transform(vectors)
         return [(float(x), float(y)) for x, y in coordinates]
+
+
+class UmapReducer:
+    def reduce(self, vectors: list[list[float]]) -> list[list[float]]:
+        import umap
+
+        model = umap.UMAP(
+            n_components=CLUSTER_REDUCTION_DIMENSIONS,
+            n_neighbors=CLUSTER_REDUCTION_NEIGHBORS,
+            min_dist=0.0,
+            metric="cosine",
+            random_state=42,
+        )
+        reduced = model.fit_transform(vectors)
+        return [[float(value) for value in row] for row in reduced]
 
 
 class HdbscanClusterer:
     def cluster(self, vectors: list[list[float]]) -> list[int]:
         import hdbscan
 
-        min_cluster_size = max(2, min(8, len(vectors)))
-        model = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size)
+        model = hdbscan.HDBSCAN(
+            min_cluster_size=HDBSCAN_MIN_CLUSTER_SIZE,
+            min_samples=HDBSCAN_MIN_SAMPLES,
+            cluster_selection_method=HDBSCAN_CLUSTER_SELECTION_METHOD,
+        )
         return [int(label) for label in model.fit_predict(vectors)]
 
 
 class StaticClusterLabeler:
     def label_clusters(self, clusters: dict[int, list[NoteRecord]]) -> dict[int, str]:
         return {
-            cluster_id: " / ".join(_dominant_topics(notes)[:2]) or f"Cluster {cluster_id}"
+            cluster_id: " / ".join(_dominant_topics(notes)[:2])
+            or f"Cluster {cluster_id}"
             for cluster_id, notes in clusters.items()
         }
 
@@ -309,20 +377,34 @@ class OpenRouterClusterLabeler:
         base_url: str = "https://openrouter.ai/api/v1",
         complete: Callable[[str, str], str] | None = None,
         max_gists: int = 8,
+        timeout: float = OPENROUTER_LABEL_TIMEOUT_SECONDS,
     ) -> None:
         self.model_name = model_name
         self.api_key = api_key
         self.base_url = base_url
         self.complete = complete or self._complete_with_openrouter
         self.max_gists = max_gists
+        self.timeout = timeout
 
     def label_clusters(self, clusters: dict[int, list[NoteRecord]]) -> dict[int, str]:
-        return {
-            cluster_id: _clean_cluster_label(
-                self.complete(self.model_name, self._prompt(cluster_notes))
-            )
-            for cluster_id, cluster_notes in clusters.items()
-        }
+        fallback_labels = StaticClusterLabeler().label_clusters(clusters)
+        labels: dict[int, str] = {}
+        for cluster_id, cluster_notes in clusters.items():
+            try:
+                labels[cluster_id] = _clean_cluster_label(
+                    self.complete(self.model_name, self._prompt(cluster_notes)),
+                    fallback=f"Cluster {cluster_id}",
+                )
+            except Exception:
+                LOGGER.warning(
+                    "OpenRouter cluster label failed for cluster %s; using static label",
+                    cluster_id,
+                    exc_info=True,
+                )
+                labels[cluster_id] = fallback_labels.get(
+                    cluster_id, f"Cluster {cluster_id}"
+                )
+        return labels
 
     def _prompt(self, notes: list[NoteRecord]) -> str:
         sample = notes[: self.max_gists]
@@ -333,7 +415,7 @@ class OpenRouterClusterLabeler:
         from openai import OpenAI
 
         api_key = self.api_key or os.environ["OPENROUTER_API_KEY"]
-        client = OpenAI(base_url=self.base_url, api_key=api_key)
+        client = OpenAI(base_url=self.base_url, api_key=api_key, timeout=self.timeout)
         completion = client.chat.completions.create(
             model=model,
             temperature=0.2,
@@ -351,11 +433,17 @@ class OpenRouterClusterLabeler:
         return completion.choices[0].message.content or "Cluster"
 
 
-def note_set_signature(notes: Iterable[NoteRecord]) -> str:
+def note_set_signature(
+    notes: Iterable[NoteRecord], content_hashes: dict[str, str] | None = None
+) -> str:
     ids = sorted(note.id for note in notes)
-    ids_hash = hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()
     max_id = max(ids) if ids else ""
-    return f"count={len(ids)};max={max_id};ids={ids_hash}"
+    if not content_hashes:
+        ids_hash = hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()
+        return f"count={len(ids)};max={max_id};ids={ids_hash}"
+    state = "|".join(f"{note_id}:{content_hashes.get(note_id, '')}" for note_id in ids)
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    return f"count={len(ids)};max={max_id};state={state_hash}"
 
 
 def _embedding_matrix(notes: list[NoteRecord]) -> list[list[float]]:
@@ -379,6 +467,25 @@ def _clusters_by_id(
 def _dominant_topics(notes: list[NoteRecord]) -> list[str]:
     counts = Counter(topic for note in notes for topic in note.topics)
     return [topic for topic, _ in counts.most_common(3)]
+
+
+def _label_clusters_with_fallback(
+    labeler: ClusterLabeler, clusters: dict[int, list[NoteRecord]]
+) -> dict[int, str]:
+    if not clusters:
+        return {}
+    fallback_labels = StaticClusterLabeler().label_clusters(clusters)
+    try:
+        labels = labeler.label_clusters(clusters)
+    except Exception:
+        LOGGER.warning("Cluster labeler failed; using static labels", exc_info=True)
+        labels = {}
+    return {
+        cluster_id: labels.get(cluster_id) or fallback_labels.get(
+            cluster_id, f"Cluster {cluster_id}"
+        )
+        for cluster_id in clusters
+    }
 
 
 def _point_from_row(row: sqlite3.Row) -> MapPoint:
@@ -406,10 +513,10 @@ def _cluster_from_row(row: sqlite3.Row) -> ClusterSummary:
     )
 
 
-def _clean_cluster_label(raw: str) -> str:
+def _clean_cluster_label(raw: str, *, fallback: str = "Cluster") -> str:
     label = " ".join(raw.replace("\n", " ").split())
     label = label.strip(" \"'`.,:;")
     words = label.split()
     if len(words) > 4:
         label = " ".join(words[:4])
-    return label or "Cluster"
+    return label or fallback
