@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import bot as bot_module
 from dairy_bot.services import storage
 from dairy_bot.services.enrichment_schemas import DayEnrichment, Mood, NoteEnrichment, Topic
+from dairy_bot.services.note_editing import note_text_sha256, replace_note_text
 
 
 TZ = ZoneInfo("Europe/Vienna")
@@ -225,6 +226,33 @@ def test_AC_4_manual_entry_edit_retriggers_note_and_day_enrichment(
     _reconcile(settings, git)
     edited = read_text(path).replace("Original entry text", "Edited entry text")
     path.write_text(edited, encoding="utf-8")
+
+    _reconcile(settings, git)
+
+    assert client.note_calls == 2
+    assert client.day_calls == 2
+
+
+def test_sprint_4_web_edit_retriggers_note_and_day_enrichment(tmp_path, monkeypatch):
+    path = run(
+        storage.append_entry(
+            tmp_path,
+            "Original web-edit text",
+            moment=datetime(2026, 6, 13, 9, 0, tzinfo=TZ),
+            timezone=TZ,
+        )
+    )
+    settings, git, client = _setup(tmp_path, monkeypatch)
+
+    _reconcile(settings, git)
+    replacement = replace_note_text(
+        content=read_text(path),
+        note_id="2026-06-13T09:00",
+        note_path=path.relative_to(tmp_path),
+        expected_sha256=note_text_sha256("Original web-edit text"),
+        new_text="Edited through web API.",
+    )
+    path.write_text(replacement.content, encoding="utf-8")
 
     _reconcile(settings, git)
 

@@ -18,6 +18,7 @@ export type JournalNote = {
   kind: "voice" | "text" | null;
   heading_display: string;
   raw_text: string;
+  raw_text_sha256: string;
   mood: MapPoint["mood"] | null;
   topics: string[];
   gist: string | null;

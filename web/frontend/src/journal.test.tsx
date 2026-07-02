@@ -32,6 +32,7 @@ const day13 = {
       kind: "text",
       heading_display: "09:42 — text",
       raw_text: "Today I built the first map prototype.",
+      raw_text_sha256: "sha-13-0942",
       mood: "calm",
       topics: ["work", "focus"],
       gist: "Built a prototype.",
@@ -42,6 +43,7 @@ const day13 = {
       kind: null,
       heading_display: "February 13 21:10",
       raw_text: "Evening reflection.",
+      raw_text_sha256: "sha-13-2110",
       mood: null,
       topics: [],
       gist: null,
@@ -61,6 +63,7 @@ const day14 = {
       kind: "voice",
       heading_display: "08:00 — voice",
       raw_text: "A vault-only morning note.",
+      raw_text_sha256: "sha-14-0800",
       mood: null,
       topics: [],
       gist: null,
@@ -77,14 +80,22 @@ const monthPayload = {
 
 function installFetchMock({
   latestStatus = 200,
+  putStatus = 200,
 }: {
   latestStatus?: number;
+  putStatus?: number;
 } = {}) {
-  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
 
     if (url.endsWith("/api/auth/me")) {
       return jsonResponse({ username: "artem" });
+    }
+    if (url.includes("/api/notes/") && init?.method === "PUT") {
+      return jsonResponse(
+        putStatus === 200 ? { id: "2026-02-13T09:42", new_sha256: "new-sha" } : { detail: "edit failed" },
+        putStatus,
+      );
     }
     if (url.endsWith("/api/days/latest")) {
       return jsonResponse(day14, latestStatus);
@@ -169,5 +180,53 @@ describe("Sprint 3 journal reader", () => {
     await renderJournal("#journal");
 
     expect(await screen.findByText("NO ENTRIES YET")).toBeInTheDocument();
+  });
+
+  it("EDIT then SAVE calls PUT with the expected hash", async () => {
+    const fetchMock = installFetchMock();
+
+    await renderJournal();
+    await userEvent.click((await screen.findAllByRole("button", { name: "EDIT" }))[0]);
+    const textarea = screen.getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "Updated note text.");
+    await userEvent.click(screen.getByRole("button", { name: "SAVE" }));
+
+    await screen.findByText("SAVED · ENRICHMENT WILL UPDATE LATER");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/notes/2026-02-13T09%3A42",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_text: "Updated note text.", expected_sha256: "sha-13-0942" }),
+      }),
+    );
+  });
+
+  it("409 keeps the attempted edit visible after reloading", async () => {
+    installFetchMock({ putStatus: 409 });
+
+    await renderJournal();
+    await userEvent.click((await screen.findAllByRole("button", { name: "EDIT" }))[0]);
+    const textarea = screen.getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "My unsaved version.");
+    await userEvent.click(screen.getByRole("button", { name: "SAVE" }));
+
+    expect(await screen.findByText("NOTE CHANGED ELSEWHERE — RELOADED")).toBeInTheDocument();
+    expect(screen.getByText("YOUR UNSAVED VERSION")).toBeInTheDocument();
+    expect(screen.getByText("My unsaved version.")).toBeInTheDocument();
+  });
+
+  it("502 shows editing disabled", async () => {
+    installFetchMock({ putStatus: 502 });
+
+    await renderJournal();
+    await userEvent.click((await screen.findAllByRole("button", { name: "EDIT" }))[0]);
+    await userEvent.click(screen.getByRole("button", { name: "SAVE" }));
+
+    expect(await screen.findByText("EDITING DISABLED")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "EDIT" })[0]).toBeDisabled();
   });
 });

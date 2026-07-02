@@ -21,6 +21,8 @@ class WebSettings:
     cookie_secure: bool = True
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 60
+    bot_edit_api_url: str | None = None
+    edit_api_token: str | None = None
 
     @classmethod
     def from_env(cls) -> WebSettings:
@@ -49,6 +51,8 @@ class WebSettings:
             login_rate_limit_window_seconds=int(
                 os.getenv("WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
             ),
+            bot_edit_api_url=os.getenv("BOT_EDIT_API_URL") or None,
+            edit_api_token=os.getenv("EDIT_API_TOKEN") or None,
         )
 
     def auth_settings(self) -> AuthSettings:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -43,6 +44,11 @@ def extract_note_raw_text(*, vault_dir: Path | str, note_path: str, ts: str) -> 
         return block.raw_text
 
     raise NoteRawTextNotFound("Raw text is unavailable for this note")
+
+
+def raw_text_sha256(raw_text: str) -> str:
+    canonical = "\n".join(_trim_blank_lines(raw_text.splitlines())).strip()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def read_day(*, vault_dir: Path | str, day: str) -> list[DayNoteBlock]:

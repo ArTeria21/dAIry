@@ -5,7 +5,9 @@ from collections import defaultdict
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
+from typing import Protocol
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
+import httpx
 from pydantic import BaseModel
 
 from dairy_web.analysis import AnalysisCache, AnalysisService, OpenRouterClusterLabeler
@@ -21,9 +23,12 @@ from dairy_web.settings import WebSettings
 from dairy_web.vault_reader import (
     DayNotFound,
     DayNoteBlock,
+    ENRICHMENT_MARKER,
+    ENTRY_HEADING_RE,
     NoteRawTextNotFound,
     extract_note_raw_text,
     list_day_dates,
+    raw_text_sha256,
     read_day,
 )
 
@@ -36,6 +41,34 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class NoteEditRequest(BaseModel):
+    new_text: str
+    expected_sha256: str
+
+
+class BotEditClient(Protocol):
+    def replace_text(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]: ...
+
+
+class HttpBotEditClient:
+    def __init__(self, *, base_url: str, token: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+
+    def replace_text(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                f"{self.base_url}/internal/notes/replace-text",
+                json=payload,
+                headers={"X-Edit-Token": self.token},
+            )
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        return response.status_code, body
+
+
 def create_app(
     *,
     settings: WebSettings | None = None,
@@ -44,6 +77,7 @@ def create_app(
     auth: AuthService | None = None,
     vault_dir: Path | str | None = None,
     cookie_secure: bool | None = None,
+    edit_client: BotEditClient | None = None,
 ) -> FastAPI:
     if settings is None and (
         store is None or analysis is None or auth is None or vault_dir is None
@@ -73,6 +107,16 @@ def create_app(
         settings.cookie_secure if cookie_secure is None and settings is not None else cookie_secure
     )
     secure_cookie = True if secure_cookie is None else secure_cookie
+    if (
+        edit_client is None
+        and settings is not None
+        and settings.bot_edit_api_url
+        and settings.edit_api_token
+    ):
+        edit_client = HttpBotEditClient(
+            base_url=settings.bot_edit_api_url,
+            token=settings.edit_api_token,
+        )
 
     app = FastAPI(title="dAIry Analytics API")
 
@@ -209,9 +253,47 @@ def create_app(
             "topics": note.topics,
             "gist": note.gist,
             "raw_text": raw_text,
+            "raw_text_sha256": raw_text_sha256(raw_text),
             "day_summary": None if day is None else day.summary,
             "note_path": note.note_path,
         }
+
+    @app.put("/api/notes/{note_id}")
+    def replace_note_text(
+        note_id: str,
+        payload: NoteEditRequest,
+        username: str = Depends(current_username),
+    ) -> dict[str, object]:
+        del username
+        note = store.get_note(note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="Note not found")
+        _validate_new_text(payload.new_text)
+        if edit_client is None:
+            raise HTTPException(status_code=502, detail="editing disabled")
+        try:
+            status, body = edit_client.replace_text(
+                {
+                    "note_id": note.id,
+                    "note_path": note.note_path,
+                    "expected_sha256": payload.expected_sha256,
+                    "new_text": payload.new_text,
+                }
+            )
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="editing disabled") from exc
+        if status == 200:
+            new_sha256 = body.get("new_sha256")
+            if not isinstance(new_sha256, str):
+                raise HTTPException(status_code=502, detail="editing disabled")
+            return {"id": note.id, "new_sha256": new_sha256}
+        if status in {404, 409, 422}:
+            detail = body.get("detail")
+            raise HTTPException(
+                status_code=status,
+                detail=detail if isinstance(detail, str) else "edit failed",
+            )
+        raise HTTPException(status_code=502, detail="editing disabled")
 
     @app.get("/api/calendar")
     def calendar(
@@ -337,6 +419,7 @@ def _day_notes(
                 "kind": block.kind,
                 "heading_display": block.heading_display,
                 "raw_text": block.raw_text,
+                "raw_text_sha256": raw_text_sha256(block.raw_text),
                 "mood": None if record is None else record.mood,
                 "topics": [] if record is None else record.topics,
                 "gist": None if record is None else record.gist,
@@ -366,6 +449,25 @@ def _validate_month(month: str) -> str:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid month") from exc
     return month
+
+
+def _validate_new_text(new_text: str) -> None:
+    trimmed = new_text.strip()
+    if not trimmed:
+        raise HTTPException(status_code=422, detail="text must not be empty")
+    if len(trimmed) > 50_000:
+        raise HTTPException(status_code=422, detail="text is too long")
+    if ENRICHMENT_MARKER in trimmed:
+        raise HTTPException(
+            status_code=422,
+            detail="text must not contain managed enrichment markers",
+        )
+    for line in trimmed.splitlines():
+        if line.startswith("## ") or ENTRY_HEADING_RE.match(line.strip()):
+            raise HTTPException(
+                status_code=422,
+                detail="text must not contain note headings (## HH:MM)",
+            )
 
 
 def _week_period(raw_date: str) -> str:

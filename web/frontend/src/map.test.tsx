@@ -63,6 +63,7 @@ const notePayload = {
   topics: ["work", "focus"],
   gist: "Built a map prototype.",
   raw_text: "Today I built the first map prototype from my journal embeddings.",
+  raw_text_sha256: "note-sha",
   day_summary: "A focused day of prototyping.",
   note_path: "2026/02/2026-02-13.md",
 };

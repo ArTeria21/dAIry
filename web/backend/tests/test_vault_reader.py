@@ -6,6 +6,7 @@ from dairy_web.vault_reader import (
     DayNotFound,
     extract_note_raw_text,
     list_day_dates,
+    raw_text_sha256,
     read_day,
 )
 
@@ -78,3 +79,7 @@ def test_list_day_dates_returns_sorted_valid_vault_files_only(tmp_path):
 def test_read_day_missing_file_raises_sanitized_error(tmp_path):
     with pytest.raises(DayNotFound, match="Day not found"):
         read_day(vault_dir=tmp_path, day="2026-06-16")
+
+
+def test_raw_text_sha256_uses_trimmed_canonical_text():
+    assert raw_text_sha256("\nOriginal text.\n\n") == raw_text_sha256("Original text.")

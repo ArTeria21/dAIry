@@ -35,6 +35,7 @@ export type NoteDetails = {
   topics: string[];
   gist: string;
   raw_text: string;
+  raw_text_sha256: string;
   day_summary: string | null;
   note_path: string;
 };

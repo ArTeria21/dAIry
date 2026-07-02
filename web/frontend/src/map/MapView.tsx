@@ -12,6 +12,7 @@ import {
   type Mood,
 } from "../design/palettes";
 import { chromeTextClass, readingTextClass } from "../design/theme";
+import { NoteEditor } from "../journal/NoteEditor";
 import { panBy, zoomAt, type ViewTransform } from "./viewTransform";
 import {
   fetchMap,
@@ -118,10 +119,14 @@ export function MapView() {
 
   async function selectPoint(point: MapPoint) {
     setSelectedPointId(point.id);
+    await loadNote(point.id);
+  }
+
+  async function loadNote(id: number) {
     setNote(null);
     setNoteUnavailable(false);
     try {
-      setNote(await fetchNoteDetails(point.id));
+      setNote(await fetchNoteDetails(id));
     } catch {
       setNoteUnavailable(true);
     }
@@ -247,7 +252,12 @@ export function MapView() {
           ) : null}
         </section>
 
-        <NotePanel note={note} noteUnavailable={noteUnavailable} selectedPointId={selectedPointId} />
+        <NotePanel
+          note={note}
+          noteUnavailable={noteUnavailable}
+          onReload={() => (selectedPointId === null ? Promise.resolve() : loadNote(selectedPointId))}
+          selectedPointId={selectedPointId}
+        />
       </div>
     </div>
   );
@@ -448,10 +458,12 @@ function PointButton({
 function NotePanel({
   note,
   noteUnavailable,
+  onReload,
   selectedPointId,
 }: {
   note: NoteDetails | null;
   noteUnavailable: boolean;
+  onReload: () => Promise<void>;
   selectedPointId: number | null;
 }) {
   if (selectedPointId === null) {
@@ -501,6 +513,12 @@ function NotePanel({
         </a>
       </div>
       <p className={cx(readingTextClass, "whitespace-pre-wrap text-[15px] leading-7")}>{note.raw_text}</p>
+      <NoteEditor
+        noteId={String(note.id)}
+        onReload={onReload}
+        rawText={note.raw_text}
+        rawTextSha256={note.raw_text_sha256}
+      />
       {daySummary ? (
         <div className="grid gap-2">
           <span className={cx(chromeTextClass, "text-[10px] text-slate")}>DAY SUMMARY</span>

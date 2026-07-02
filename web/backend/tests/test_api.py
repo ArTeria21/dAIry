@@ -18,6 +18,7 @@ from dairy_web.app import create_app
 from dairy_web.auth import AuthService, AuthSettings, SessionSigner
 from dairy_web.data_access import DayRecord, NoteRecord
 from dairy_web.resurface import resurface_weight
+from dairy_web.vault_reader import raw_text_sha256
 
 
 class FakeVerifier:
@@ -63,6 +64,18 @@ class FakeAnalysis:
             n_clusters=1,
             n_noise=0,
         )
+
+
+class FakeEditClient:
+    def __init__(self, responses: list[tuple[int, dict[str, object]]]):
+        self.responses = list(responses)
+        self.calls: list[dict[str, str]] = []
+
+    def replace_text(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]:
+        self.calls.append(payload)
+        if not self.responses:
+            return 500, {"detail": "unexpected"}
+        return self.responses.pop(0)
 
 
 class FakeProjector:
@@ -199,6 +212,7 @@ def build_store_client(
     *,
     notes: list[NoteRecord],
     days: list[DayRecord],
+    edit_client=None,
 ) -> TestClient:
     analysis = FakeAnalysis(
         MapSnapshot(
@@ -226,6 +240,7 @@ def build_store_client(
         auth=auth,
         vault_dir=tmp_path,
         cookie_secure=True,
+        edit_client=edit_client,
     )
     return TestClient(app, base_url="https://testserver")
 
@@ -405,6 +420,7 @@ def test_AC_6_note_detail_is_the_only_payload_with_raw_text_and_missing_note_is_
     missing = client.get("/api/notes/2026-06-18T11:00")
 
     assert detail["raw_text"] == "Private raw transcript."
+    assert detail["raw_text_sha256"] == raw_text_sha256("Private raw transcript.")
     assert detail["day_summary"] == "A processed summary of the day."
     assert detail["mood_evidence"] == "The note sounds calm and reflective."
     assert missing.status_code == 404
@@ -439,6 +455,7 @@ def test_sprint_3_day_detail_reads_vault_and_joins_enrichment_by_bot_note_ids(tm
         "kind": None,
         "heading_display": "June 16 21:55",
         "raw_text": "Unmatched raw text.",
+        "raw_text_sha256": raw_text_sha256("Unmatched raw text."),
         "mood": None,
         "topics": [],
         "gist": None,
@@ -512,6 +529,87 @@ def test_sprint_3_day_endpoint_validation_and_missing_days_are_sanitized(tmp_pat
     assert str(tmp_path) not in missing_day.text
     assert invalid_month.status_code == 422
     assert empty_latest.get("/api/days/latest").status_code == 404
+
+
+def test_sprint_4_put_note_proxies_to_bot_with_db_note_path_and_auth(tmp_path):
+    note = make_note()
+    fake_edit = FakeEditClient([(200, {"new_sha256": "new-hash"})])
+    client = build_store_client(tmp_path, notes=[note], days=[], edit_client=fake_edit)
+
+    assert client.put(
+        f"/api/notes/{note.id}",
+        json={"new_text": "Updated", "expected_sha256": "old-hash"},
+    ).status_code == 401
+
+    login(client)
+    response = client.put(
+        f"/api/notes/{note.id}",
+        json={
+            "new_text": "Updated",
+            "expected_sha256": "old-hash",
+            "note_path": "evil.md",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": note.id, "new_sha256": "new-hash"}
+    assert fake_edit.calls == [
+        {
+            "note_id": note.id,
+            "note_path": note.note_path,
+            "expected_sha256": "old-hash",
+            "new_text": "Updated",
+        }
+    ]
+
+
+def test_sprint_4_put_note_validation_and_disabled_editing(tmp_path):
+    note = make_note()
+    fake_edit = FakeEditClient([(200, {"new_sha256": "unused"})])
+    client = build_store_client(tmp_path, notes=[note], days=[], edit_client=fake_edit)
+    disabled = build_store_client(tmp_path / "disabled", notes=[note], days=[])
+    login(client)
+    login(disabled)
+
+    invalid = client.put(
+        f"/api/notes/{note.id}",
+        json={"new_text": "bad\n## 12:34", "expected_sha256": "old-hash"},
+    )
+    disabled_response = disabled.put(
+        f"/api/notes/{note.id}",
+        json={"new_text": "Updated", "expected_sha256": "old-hash"},
+    )
+
+    assert invalid.status_code == 422
+    assert fake_edit.calls == []
+    assert disabled_response.status_code == 502
+    assert disabled_response.json()["detail"] == "editing disabled"
+
+
+def test_sprint_4_put_note_maps_bot_statuses(tmp_path):
+    note = make_note()
+
+    for status in (404, 409, 422):
+        fake_edit = FakeEditClient([(status, {"detail": f"bot {status}"})])
+        client = build_store_client(tmp_path / str(status), notes=[note], days=[], edit_client=fake_edit)
+        login(client)
+
+        response = client.put(
+            f"/api/notes/{note.id}",
+            json={"new_text": "Updated", "expected_sha256": "old-hash"},
+        )
+
+        assert response.status_code == status
+        assert response.json()["detail"] == f"bot {status}"
+
+    fake_edit = FakeEditClient([(500, {"detail": "boom"})])
+    client = build_store_client(tmp_path / "500", notes=[note], days=[], edit_client=fake_edit)
+    login(client)
+    response = client.put(
+        f"/api/notes/{note.id}",
+        json={"new_text": "Updated", "expected_sha256": "old-hash"},
+    )
+    assert response.status_code == 502
 
 
 def test_AC_6_calendar_topics_and_resurface_payloads_do_not_include_raw_text(tmp_path):

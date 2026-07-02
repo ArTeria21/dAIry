@@ -56,3 +56,10 @@
 **Отклонения от спеки:** нет.
 **Грабли/наблюдения:** Схема id в боте подтверждена: base `YYYY-MM-DDTHH:MM`, дубликаты в порядке файла получают `#2`, `#3`. `extract_note_raw_text` теперь использует общий парсер блоков; тест зафиксировал, что первый duplicate timestamp по-прежнему возвращает первый блок. Month index не содержит raw/summary/path; `raw_text` остаётся только в detail/day endpoints.
 **Backlog-наблюдения:** Journal month index сейчас сканирует vault и перечитывает файлы на запрос, как разрешено спекой; если vault сильно вырастет, нужен cache/manifest для counts и date list.
+
+## [2026-07-02] Sprint 4 — done
+**Агент:** GPT-5 Codex.
+**Сделано:** Добавлен internal edit API бота на aiohttp с токеном, optimistic hash replacement, `journal_lock` + `git_sync`; layer3 получил `raw_text_sha256` в detail/day payloads и `PUT /api/notes/{id}` как proxy в бота. Frontend получил общий `NoteEditor` в Map NotePanel и Journal reader с обработкой 409/502; compose/env/README описывают opt-in editing без публикации порта 8081.
+**Отклонения от спеки:** нет.
+**Грабли/наблюдения:** Схема id для edit lookup совпала с Sprint 3: `YYYY-MM-DDTHH:MM` и `#n` для дублей, поэтому replace-функция ищет конкретный heading по `note_id`. Git flow edit API: `prepare_for_write` → read/replace/write → `commit_and_push`; `GitPushError` считается локальным успехом и только логируется. Root `uv sync` чистит backend-only packages (`umap`/`hdbscan`), поэтому root pytest теперь явно ограничен `testpaths = ["tests"]`; backend tests остаются отдельным gate из `web/backend`. Существующий `.gitignore` игнорирует любой каталог `journal/`, из-за чего frontend journal-компоненты нужно было добавить через `git add -f`.
+**Backlog-наблюдения:** Web save сейчас сообщает только общие статусы; если понадобится UX точнее, backend уже пробрасывает HTTP-классы ошибок, и текст можно уточнить без изменения bot API. Стоит сузить ignore-rule `journal/`, чтобы будущие файлы под `web/frontend/src/journal/` не требовали force-add.
