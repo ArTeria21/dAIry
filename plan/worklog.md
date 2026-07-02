@@ -49,3 +49,10 @@
 **Отклонения от спеки:** ручная проверка через Vite+backend не запускалась; проверка выполнена автоматическими gate-командами из спеки.
 **Грабли/наблюдения:** Тесты карты намеренно переписаны под новое поведение: cluster-legend кликается и приглушает остальные кластеры, mood-legend кликается, TOPIC использует graphite/ink/muted вместо `topicColor`, wheel теперь проверяет x/y по формуле, old-cache payload без `n_noise` не падает. `npm install` проходит, но выводит 1 low-severity audit item и предупреждение allow-scripts по `esbuild`/`fsevents`; на sprint-2 gates это не влияет.
 **Backlog-наблюдения:** Для будущей ручной QA карты удобно поднять минимальный authenticated mock/backend fixture, чтобы не зависеть от реального дневника и не трогать `diary/`.
+
+## [2026-07-02] Sprint 3 — done
+**Агент:** GPT-5 Codex.
+**Сделано:** Добавлены `read_day`/`list_day_dates`, API `/api/days`, `/api/days/latest`, `/api/days/{date}` с auth, prev/next и join enrichment по id. Frontend получил route `#journal[/YYYY-MM-DD]`, `JournalView` с day reader/month index и deep-links из Map/Memory/Seasons.
+**Отклонения от спеки:** нет.
+**Грабли/наблюдения:** Схема id в боте подтверждена: base `YYYY-MM-DDTHH:MM`, дубликаты в порядке файла получают `#2`, `#3`. `extract_note_raw_text` теперь использует общий парсер блоков; тест зафиксировал, что первый duplicate timestamp по-прежнему возвращает первый блок. Month index не содержит raw/summary/path; `raw_text` остаётся только в detail/day endpoints.
+**Backlog-наблюдения:** Journal month index сейчас сканирует vault и перечитывает файлы на запрос, как разрешено спекой; если vault сильно вырастет, нужен cache/manifest для counts и date list.

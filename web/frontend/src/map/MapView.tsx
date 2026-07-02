@@ -496,8 +496,8 @@ function NotePanel({
     >
       <div className="flex items-center justify-between gap-3">
         <Tag>{note.mood.toUpperCase()}</Tag>
-        <a className={cx(chromeTextClass, "text-[10px] text-schematic-blue")} href={`#seasons?date=${note.date}`}>
-          {note.date}
+        <a className={cx(chromeTextClass, "text-[10px] text-schematic-blue")} href={`#journal/${note.date}`}>
+          {note.date} · OPEN DAY
         </a>
       </div>
       <p className={cx(readingTextClass, "whitespace-pre-wrap text-[15px] leading-7")}>{note.raw_text}</p>

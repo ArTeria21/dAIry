@@ -158,6 +158,10 @@ describe("Phase 4 seasons view", () => {
     expect(within(panel).getByText("A focused day of prototyping.")).toHaveClass(
       "font-gerstnerprogramm",
     );
+    expect(within(panel).getByRole("link", { name: "READ THIS DAY" })).toHaveAttribute(
+      "href",
+      "#journal/2026-02-13",
+    );
     expect(within(panel).getByText("SLEEP 4/5")).toBeInTheDocument();
     expect(within(panel).getByText("SPORT YES")).toBeInTheDocument();
     expect(within(panel).getByText("DEEP FOCUS YES")).toBeInTheDocument();

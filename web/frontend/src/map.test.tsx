@@ -449,7 +449,8 @@ describe("Phase 3 map view", () => {
     expect(within(panel).getByText("WORK")).toBeInTheDocument();
     expect(within(panel).getByText("FOCUS")).toBeInTheDocument();
     expect(within(panel).getByText("0.82")).toBeInTheDocument();
-    expect(within(panel).getByRole("link", { name: "2026-02-13" })).toBeInTheDocument();
+    const openDay = within(panel).getByRole("link", { name: "2026-02-13 · OPEN DAY" });
+    expect(openDay).toHaveAttribute("href", "#journal/2026-02-13");
   });
 
   it("hides the day summary block when the note has no summary", async () => {

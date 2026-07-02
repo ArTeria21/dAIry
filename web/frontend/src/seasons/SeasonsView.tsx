@@ -161,6 +161,9 @@ function DayPanel({ day }: { day: CalendarDay | null }) {
         <Tag>{day.mood.toUpperCase()}</Tag>
         <span className={cx(chromeTextClass, "text-[10px] text-slate")}>{day.weekday}</span>
       </div>
+      <a className={cx(chromeTextClass, "text-[10px] text-schematic-blue")} href={`#journal/${day.date}`}>
+        READ THIS DAY
+      </a>
       <p className={cx(readingTextClass, "text-sm leading-6")}>{day.summary}</p>
       <div className="flex flex-wrap gap-2">
         {factChips(day.facts).map((chip) => (

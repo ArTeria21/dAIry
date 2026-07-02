@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import date
@@ -17,7 +18,14 @@ from dairy_web.auth import (
 from dairy_web.data_access import DayRecord, EnrichmentReadStore, NoteRecord
 from dairy_web.resurface import choose_resurface_day
 from dairy_web.settings import WebSettings
-from dairy_web.vault_reader import NoteRawTextNotFound, extract_note_raw_text
+from dairy_web.vault_reader import (
+    DayNotFound,
+    DayNoteBlock,
+    NoteRawTextNotFound,
+    extract_note_raw_text,
+    list_day_dates,
+    read_day,
+)
 
 
 SESSION_COOKIE = "dairy_session"
@@ -124,6 +132,54 @@ def create_app(
             "clusters": [asdict(cluster) for cluster in snapshot.clusters],
             "n_noise": snapshot.n_noise,
         }
+
+    @app.get("/api/days")
+    def day_index(
+        month: str = Query(...),
+        username: str = Depends(current_username),
+    ) -> dict[str, object]:
+        del username
+        valid_month = _validate_month(month)
+        days = []
+        for day in list_day_dates(vault_dir=vault_root):
+            if not day.startswith(valid_month):
+                continue
+            record = store.get_day(day)
+            days.append(
+                {
+                    "date": day,
+                    "note_count": len(read_day(vault_dir=vault_root, day=day)),
+                    "mood": None if record is None else record.mood,
+                }
+            )
+        return {"days": days}
+
+    @app.get("/api/days/latest")
+    def latest_day(username: str = Depends(current_username)) -> dict[str, object]:
+        del username
+        dates = list_day_dates(vault_dir=vault_root)
+        if not dates:
+            raise HTTPException(status_code=404, detail="Day not found")
+        return _day_payload(
+            vault_dir=vault_root,
+            store=store,
+            target_date=dates[-1],
+            dates=dates,
+        )
+
+    @app.get("/api/days/{target_date}")
+    def day_detail(
+        target_date: date,
+        username: str = Depends(current_username),
+    ) -> dict[str, object]:
+        del username
+        day = target_date.isoformat()
+        return _day_payload(
+            vault_dir=vault_root,
+            store=store,
+            target_date=day,
+            dates=list_day_dates(vault_dir=vault_root),
+        )
 
     @app.get("/api/notes/{note_id}")
     def note_detail(
@@ -232,6 +288,84 @@ def _calendar_day(day: DayRecord) -> dict[str, object]:
         "summary": day.summary,
         "facts": dict(day.facts),
     }
+
+
+def _day_payload(
+    *,
+    vault_dir: Path,
+    store: EnrichmentReadStore,
+    target_date: str,
+    dates: list[str],
+) -> dict[str, object]:
+    try:
+        blocks = read_day(vault_dir=vault_dir, day=target_date)
+    except DayNotFound as exc:
+        raise HTTPException(status_code=404, detail="Day not found") from exc
+
+    try:
+        index = dates.index(target_date)
+    except ValueError:
+        index = -1
+    day = store.get_day(target_date)
+    return {
+        "date": target_date,
+        "prev_date": dates[index - 1] if index > 0 else None,
+        "next_date": dates[index + 1] if 0 <= index < len(dates) - 1 else None,
+        "day": None if day is None else _journal_day(day),
+        "notes": _day_notes(blocks=blocks, store=store, target_date=target_date),
+    }
+
+
+def _day_notes(
+    *,
+    blocks: list[DayNoteBlock],
+    store: EnrichmentReadStore,
+    target_date: str,
+) -> list[dict[str, object]]:
+    seen: dict[str, int] = {}
+    notes: list[dict[str, object]] = []
+    for block in blocks:
+        base_id = f"{target_date}T{block.ts}"
+        duplicate_count = seen.get(base_id, 0) + 1
+        seen[base_id] = duplicate_count
+        note_id = base_id if duplicate_count == 1 else f"{base_id}#{duplicate_count}"
+        record = store.get_note(note_id)
+        notes.append(
+            {
+                "id": note_id,
+                "ts": block.ts,
+                "kind": block.kind,
+                "heading_display": block.heading_display,
+                "raw_text": block.raw_text,
+                "mood": None if record is None else record.mood,
+                "topics": [] if record is None else record.topics,
+                "gist": None if record is None else record.gist,
+            }
+        )
+    return notes
+
+
+def _journal_day(day: DayRecord) -> dict[str, object]:
+    return {
+        "mood": day.mood,
+        "mood_confidence": day.mood_confidence,
+        "summary": day.summary,
+        "key_topics": day.key_topics,
+        "weekday": day.weekday,
+        "is_weekend": day.is_weekend,
+        "season": day.season,
+        "facts": dict(day.facts),
+    }
+
+
+def _validate_month(month: str) -> str:
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=422, detail="Invalid month")
+    try:
+        date.fromisoformat(f"{month}-01")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid month") from exc
+    return month
 
 
 def _week_period(raw_date: str) -> str:
