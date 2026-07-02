@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clusterColor,
   clusterPalette,
   moodColor,
   moodPalette,
-  topicColor,
+  noiseColor,
   topicHighlightColor,
   topicMutedColor,
-  topicPalette,
+  topicPointColor,
+  topicPointHighlightColor,
 } from "./design/palettes";
 
 describe("Phase 2 shared visualization palettes", () => {
@@ -27,14 +29,15 @@ describe("Phase 2 shared visualization palettes", () => {
     expect(Object.values(moodPalette)).not.toContain("#fb631b");
   });
 
-  it("AC-3: keeps clusters muted and topics on a stable category palette", () => {
-    expect(clusterPalette.length).toBeGreaterThanOrEqual(8);
+  it("AC-3: keeps clusters muted and reserves topic colors for highlight states", () => {
+    expect(clusterPalette).toHaveLength(8);
     expect(clusterPalette).not.toContain("#fb631b");
-    expect(topicPalette.length).toBeGreaterThanOrEqual(10);
-    expect(topicPalette).not.toContain(topicHighlightColor);
-    expect(topicPalette).toContain(topicColor("work"));
-    expect(topicColor("work")).not.toBe(topicMutedColor);
-    expect(topicColor("")).toBe(topicMutedColor);
+    expect(clusterColor(-1)).toBe(noiseColor);
+    expect(clusterColor(0)).toBe(clusterPalette[0]);
+    expect(clusterColor(8)).toBe(clusterPalette[0]);
+    expect(noiseColor).toBe("#cbcbcb");
+    expect(topicPointColor).toBe("#434343");
+    expect(topicPointHighlightColor).toBe("#181818");
     expect(topicHighlightColor).toBe("#fb631b");
     expect(topicMutedColor).toBe("#858483");
   });

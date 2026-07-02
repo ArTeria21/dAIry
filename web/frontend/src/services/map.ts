@@ -20,6 +20,7 @@ export type MapCluster = {
 export type MapPayload = {
   signature: string;
   computed_at: string;
+  n_noise: number;
   points: MapPoint[];
   clusters: MapCluster[];
 };
@@ -34,7 +35,7 @@ export type NoteDetails = {
   topics: string[];
   gist: string;
   raw_text: string;
-  day_summary: string;
+  day_summary: string | null;
   note_path: string;
 };
 

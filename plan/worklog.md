@@ -42,3 +42,10 @@
 **Отклонения от спеки:** нет.
 **Грабли/наблюдения:** Новый формат подписи (`state=...` вместо id-only при наличии content_hash) ожидаемо вызовет один полный recompute map-cache после деплоя. `uv sync` под repo `.python-version=3.13` падал на древнем transitive `llvmlite==0.36.0`; добавлен явный `numba>=0.62` и ограничение backend `requires-python = ">=3.12,<3.14"`, после чего lock перешёл на `numba==0.66.0`/`llvmlite==0.48.0`. Старый `analysis_cache.sqlite3` без `metadata.n_noise` пересоздаётся целиком.
 **Backlog-наблюдения:** В тестах остаётся `StarletteDeprecationWarning` про `fastapi.testclient`/`httpx`; не относится к спринту, но позже стоит обновить тестовый клиент по рекомендации Starlette/FastAPI.
+
+## [2026-07-02] Sprint 2 — done
+**Агент:** GPT-5 Codex.
+**Сделано:** Frontend карты переведён на чистый `viewTransform` (`zoomAt`/`panBy`) с zoom-to-cursor; добавлен единый `ui/Legend` и общий `highlight` для CLUSTER/MOOD/TOPIC. Шум теперь серый `noiseColor`, TOPIC-режим стал highlight-фильтром без 23-цветной раскраски, `n_noise` нормализуется с default 0, `day_summary` показывается в NotePanel.
+**Отклонения от спеки:** ручная проверка через Vite+backend не запускалась; проверка выполнена автоматическими gate-командами из спеки.
+**Грабли/наблюдения:** Тесты карты намеренно переписаны под новое поведение: cluster-legend кликается и приглушает остальные кластеры, mood-legend кликается, TOPIC использует graphite/ink/muted вместо `topicColor`, wheel теперь проверяет x/y по формуле, old-cache payload без `n_noise` не падает. `npm install` проходит, но выводит 1 low-severity audit item и предупреждение allow-scripts по `esbuild`/`fsevents`; на sprint-2 gates это не влияет.
+**Backlog-наблюдения:** Для будущей ручной QA карты удобно поднять минимальный authenticated mock/backend fixture, чтобы не зависеть от реального дневника и не трогать `diary/`.

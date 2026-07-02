@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import {
-  clusterPalette,
+  clusterColor,
   moodPalette,
-  topicColor,
+  noiseColor,
+  topicPointColor,
+  topicPointHighlightColor,
   topicMutedColor,
 } from "./design/palettes";
 
@@ -20,6 +22,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 const mapPayload = {
   signature: "notes:2:max:2",
   computed_at: "2026-06-17T08:00:00Z",
+  n_noise: 0,
   points: [
     {
       id: 1,
@@ -123,7 +126,7 @@ function installMapViewportRect() {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function getBoundingClientRect(
     this: HTMLElement,
   ) {
-    if (this.dataset.testid === "map-viewport") {
+    if (this.dataset.testid === "map-panel" || this.dataset.testid === "map-viewport") {
       return mapViewportRect;
     }
 
@@ -186,6 +189,23 @@ function readViewportTransform(viewport: HTMLElement) {
   };
 }
 
+function expectedZoomAt(
+  current: ReturnType<typeof readViewportTransform>,
+  cursorX: number,
+  cursorY: number,
+  deltaY: number,
+) {
+  const clampedDelta = Math.min(240, Math.max(-240, deltaY));
+  const nextScale = Math.min(6, Math.max(0.5, current.scale * Math.exp(-clampedDelta * 0.0008)));
+  const k = nextScale / current.scale;
+
+  return {
+    scale: nextScale,
+    x: cursorX - (cursorX - current.x) * k,
+    y: cursorY - (cursorY - current.y) * k,
+  };
+}
+
 function formatPx(value: number) {
   return `${Number(value.toFixed(2))}px`;
 }
@@ -213,8 +233,103 @@ describe("Phase 3 map view", () => {
       "aria-pressed",
       "true",
     );
-    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterPalette[0]);
-    expect(point2.style.getPropertyValue("--point-color")).toBe(clusterPalette[1]);
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("min-h-[74px]");
+    expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "HOME" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "UNCLUSTERED" })).not.toBeInTheDocument();
+    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterColor(0));
+    expect(point2.style.getPropertyValue("--point-color")).toBe(clusterColor(1));
+  });
+
+  it("clicking CLUSTER legend chips highlights the selected cluster and toggles back", async () => {
+    installFetchMock();
+
+    await renderAuthenticatedMap();
+
+    const point1 = await screen.findByRole("button", { name: "NOTE 1" });
+    const point2 = screen.getByRole("button", { name: "NOTE 2" });
+
+    await userEvent.click(screen.getByRole("button", { name: "WORK" }));
+
+    expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "true");
+    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterColor(0));
+    expect(point2.style.getPropertyValue("--point-color")).toBe(topicMutedColor);
+    expect(screen.getByTestId("cluster-hull-0").parentElement).toHaveAttribute("opacity", "1");
+    expect(screen.getByTestId("cluster-hull-1").parentElement).toHaveAttribute("opacity", "0.28");
+
+    await userEvent.click(screen.getByRole("button", { name: "WORK" }));
+
+    expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "false");
+    expect(point2.style.getPropertyValue("--point-color")).toBe(clusterColor(1));
+    expect(screen.getByTestId("cluster-hull-1").parentElement).toHaveAttribute("opacity", "1");
+  });
+
+  it("renders unclustered noise as neutral gray with an UNCLUSTERED legend chip", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 1,
+        points: [
+          ...mapPayload.points,
+          {
+            id: 3,
+            x: 0.5,
+            y: 0.5,
+            cluster_id: -1,
+            mood: "neutral",
+            topics: ["loose"],
+            gist: "Did not fit a cluster.",
+            date: "2026-02-15",
+            ts: "2026-02-15T10:00:00Z",
+          },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+
+    const noisePoint = await screen.findByRole("button", { name: "NOTE 3" });
+    expect(screen.getByRole("button", { name: "UNCLUSTERED" })).toBeInTheDocument();
+    expect(screen.getByTestId("legend-swatch-cluster-unclustered").style.getPropertyValue("--legend-color")).toBe(
+      noiseColor,
+    );
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(noiseColor);
+
+    await userEvent.click(screen.getByRole("button", { name: "HOME" }));
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(noiseColor);
+  });
+
+  it("renders only the UNCLUSTERED legend chip when every point is noise", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 2,
+        points: [
+          { ...mapPayload.points[0], cluster_id: -1 },
+          { ...mapPayload.points[1], cluster_id: -1 },
+        ],
+        clusters: [],
+      },
+    });
+
+    await renderAuthenticatedMap();
+
+    expect(await screen.findByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "UNCLUSTERED" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "WORK" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(noiseColor);
+    expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(noiseColor);
+  });
+
+  it("treats legacy map payloads without n_noise as zero noise", async () => {
+    const { n_noise: _nNoise, ...legacyPayload } = mapPayload;
+    installFetchMock({ map: legacyPayload });
+
+    await renderAuthenticatedMap();
+
+    expect(await screen.findByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "UNCLUSTERED" })).not.toBeInTheDocument();
   });
 
   it("renders thin Schematic Blue cluster hulls and uppercase mono labels", async () => {
@@ -224,8 +339,10 @@ describe("Phase 3 map view", () => {
 
     expect(await screen.findByTestId("cluster-hull-0")).toHaveAttribute("stroke", "#0d6ea5");
     expect(screen.getByTestId("cluster-hull-1")).toHaveAttribute("stroke", "#0d6ea5");
-    expect(screen.getByText("WORK")).toHaveClass("font-plexmono");
-    expect(screen.getByText("HOME")).toHaveClass("font-plexmono");
+    expect(screen.getByTestId("cluster-hull-0").nextElementSibling).toHaveTextContent("WORK");
+    expect(screen.getByTestId("cluster-hull-0").nextElementSibling).toHaveClass("font-plexmono");
+    expect(screen.getByTestId("cluster-hull-1").nextElementSibling).toHaveTextContent("HOME");
+    expect(screen.getByTestId("cluster-hull-1").nextElementSibling).toHaveClass("font-plexmono");
   });
 
   it("selecting MOOD recolors points with the shared mood palette", async () => {
@@ -234,38 +351,75 @@ describe("Phase 3 map view", () => {
     await renderAuthenticatedMap();
     await userEvent.click(await screen.findByRole("button", { name: "MOOD" }));
 
+    expect(screen.getByLabelText("MOOD LEGEND")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
       moodPalette.calm,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       moodPalette.joy,
     );
+
+    await userEvent.click(screen.getByRole("button", { name: "CALM" }));
+    expect(screen.getByRole("button", { name: "CALM" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
+      moodPalette.calm,
+    );
+    expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
+      topicMutedColor,
+    );
   });
 
-  it("selecting TOPIC uses stable topic colors and fades nonmatching points when filtered", async () => {
+  it("switching color modes resets highlight without changing the legend frame height", async () => {
+    installFetchMock();
+
+    await renderAuthenticatedMap();
+
+    await userEvent.click(await screen.findByRole("button", { name: "WORK" }));
+    expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
+      topicMutedColor,
+    );
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("min-h-[74px]");
+
+    await userEvent.click(screen.getByRole("button", { name: "MOOD" }));
+
+    expect(screen.getByLabelText("MOOD LEGEND")).toHaveClass("min-h-[74px]");
+    expect(screen.getByRole("button", { name: "CALM" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
+      moodPalette.joy,
+    );
+  });
+
+  it("selecting TOPIC uses neutral point colors and fades nonmatching points when filtered", async () => {
     installFetchMock();
 
     await renderAuthenticatedMap();
     await userEvent.click(await screen.findByRole("button", { name: "TOPIC" }));
 
-    expect(screen.getByLabelText("TOPIC COLOR LEGEND")).toBeInTheDocument();
-    expect(screen.getByTestId("legend-swatch-topic-work").style.getPropertyValue("--legend-color")).toBe(
-      topicColor("work"),
-    );
+    expect(screen.getByLabelText("TOPIC LEGEND")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ALL TOPICS" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
-      topicColor("work"),
+      topicPointColor,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
-      topicColor("home"),
+      topicPointColor,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "WORK" }));
 
+    expect(screen.getByRole("button", { name: "ALL TOPICS" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
-      topicColor("work"),
+      topicPointHighlightColor,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       topicMutedColor,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "WORK" }));
+
+    expect(screen.getByRole("button", { name: "ALL TOPICS" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
+      topicPointColor,
     );
   });
 
@@ -283,17 +437,34 @@ describe("Phase 3 map view", () => {
     const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/notes/1", expect.objectContaining({ credentials: "include" }));
-    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterPalette[0]);
+    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterColor(0));
     expect(point1).toHaveClass("outline-ink-black");
     expect(within(panel).getByText("Today I built the first map prototype from my journal embeddings.")).toHaveClass(
       "font-gerstnerprogramm",
     );
+    expect(within(panel).getByText("DAY SUMMARY")).toHaveClass("font-ftsystemmono");
+    expect(within(panel).getByText("A focused day of prototyping.")).toHaveClass("font-gerstnerprogramm");
     expect(within(panel).getByText("CALM")).toBeInTheDocument();
     expect(within(panel).getByText("The note is reflective and steady.")).toBeInTheDocument();
     expect(within(panel).getByText("WORK")).toBeInTheDocument();
     expect(within(panel).getByText("FOCUS")).toBeInTheDocument();
     expect(within(panel).getByText("0.82")).toBeInTheDocument();
     expect(within(panel).getByRole("link", { name: "2026-02-13" })).toBeInTheDocument();
+  });
+
+  it("hides the day summary block when the note has no summary", async () => {
+    installFetchMock({
+      note: {
+        ...notePayload,
+        day_summary: "",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    expect(within(panel).queryByText("DAY SUMMARY")).not.toBeInTheDocument();
   });
 
   it("renders an empty map state with no note point controls", async () => {
@@ -320,7 +491,7 @@ describe("Phase 3 map view", () => {
 
     await renderAuthenticatedMap();
 
-    await userEvent.click(screen.getByRole("button", { name: "NOTE 1" }));
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
     await waitFor(() => {
       expect(screen.getByText("NOTE UNAVAILABLE")).toBeInTheDocument();
     });
@@ -364,7 +535,7 @@ describe("Interactive embedding map navigation", () => {
     expect(screen.queryByRole("button", { name: "ZOOM IN" })).not.toBeInTheDocument();
   });
 
-  it("AC-3/AC-4: wheel events zoom in and then zoom back toward the fitted view", async () => {
+  it("AC-3/AC-4: wheel events zoom around the cursor and then zoom back toward the fitted view", async () => {
     installFetchMock();
 
     await renderAuthenticatedMap();
@@ -373,12 +544,19 @@ describe("Interactive embedding map navigation", () => {
 
     fireEvent.wheel(viewport, { deltaY: -100, clientX: 320, clientY: 240 });
     const zoomed = readViewportTransform(viewport);
+    const expectedZoomed = expectedZoomAt(initial, 320, 240, -100);
     expect(zoomed.scale).toBeGreaterThan(initial.scale);
+    expect(zoomed.scale).toBeCloseTo(expectedZoomed.scale, 5);
+    expect(zoomed.x).toBeCloseTo(expectedZoomed.x, 5);
+    expect(zoomed.y).toBeCloseTo(expectedZoomed.y, 5);
 
     fireEvent.wheel(viewport, { deltaY: 100, clientX: 320, clientY: 240 });
     const zoomedBack = readViewportTransform(viewport);
+    const expectedZoomedBack = expectedZoomAt(zoomed, 320, 240, 100);
     expect(zoomedBack.scale).toBeLessThan(zoomed.scale);
-    expect(zoomedBack.scale).toBeGreaterThanOrEqual(initial.scale);
+    expect(zoomedBack.scale).toBeCloseTo(expectedZoomedBack.scale, 5);
+    expect(zoomedBack.x).toBeCloseTo(expectedZoomedBack.x, 5);
+    expect(zoomedBack.y).toBeCloseTo(expectedZoomedBack.y, 5);
   });
 
   it("AC-5: pointer drag pans the rendered point layer by the cursor delta", async () => {
@@ -404,14 +582,15 @@ describe("Interactive embedding map navigation", () => {
     const viewport = await screen.findByTestId("map-viewport");
 
     fireEvent.wheel(viewport, { deltaY: -100, clientX: 320, clientY: 240 });
+    const zoomed = readViewportTransform(viewport);
     fireEvent.pointerDown(viewport, { pointerId: 1, button: 0, buttons: 1, clientX: 300, clientY: 240 });
     fireEvent.pointerMove(viewport, { pointerId: 1, buttons: 1, clientX: 340, clientY: 270 });
     fireEvent.pointerUp(viewport, { pointerId: 1, button: 0, buttons: 0, clientX: 340, clientY: 270 });
 
     const transformed = readViewportTransform(viewport);
     expect(transformed.scale).toBeGreaterThan(1);
-    expect(transformed.x).toBe(40);
-    expect(transformed.y).toBe(30);
+    expect(transformed.x).toBeCloseTo(zoomed.x + 40, 5);
+    expect(transformed.y).toBeCloseTo(zoomed.y + 30, 5);
 
     await userEvent.click(screen.getByRole("button", { name: "NOTE 1" }));
 
@@ -577,7 +756,7 @@ describe("Map interaction regressions", () => {
     fireEvent.pointerUp(viewport, { pointerId: 1, button: 0, buttons: 0, clientX: 340, clientY: 270 });
 
     await userEvent.click(screen.getByRole("button", { name: "MOOD" }));
-    expect(screen.getByLabelText("MOOD COLOR LEGEND")).toBeInTheDocument();
+    expect(screen.getByLabelText("MOOD LEGEND")).toBeInTheDocument();
     expect(screen.getByTestId("legend-swatch-mood-calm").style.getPropertyValue("--legend-color")).toBe(
       moodPalette.calm,
     );
@@ -591,7 +770,7 @@ describe("Map interaction regressions", () => {
     await userEvent.click(screen.getByRole("button", { name: "TOPIC" }));
     await userEvent.click(screen.getByRole("button", { name: "WORK" }));
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
-      topicColor("work"),
+      topicPointHighlightColor,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       topicMutedColor,
