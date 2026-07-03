@@ -86,11 +86,18 @@ const monthPayload = {
   ],
 };
 
+const day13AfterDelete = {
+  ...day13,
+  notes: [day13.notes[1]],
+};
+
 function installFetchMock({
   latestStatus = 200,
+  deleteStatus = 200,
   putStatus = 200,
 }: {
   latestStatus?: number;
+  deleteStatus?: number;
   putStatus?: number;
 } = {}) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -103,6 +110,12 @@ function installFetchMock({
       return jsonResponse(
         putStatus === 200 ? { id: "2026-02-13T09:42", new_sha256: "new-sha" } : { detail: "edit failed" },
         putStatus,
+      );
+    }
+    if (url.includes("/api/notes/") && init?.method === "DELETE") {
+      return jsonResponse(
+        deleteStatus === 200 ? { id: "2026-02-13T09:42", deleted: true } : { detail: "delete failed" },
+        deleteStatus,
       );
     }
     if (url.endsWith("/api/days/latest")) {
@@ -208,6 +221,53 @@ describe("Sprint 3 journal reader", () => {
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ new_text: "Updated note text.", expected_sha256: "sha-13-0942" }),
+      }),
+    );
+  });
+
+  it("deletes a journal note only after confirmation and refetches the day", async () => {
+    let dayGetCount = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+
+      if (url.endsWith("/api/auth/me")) {
+        return jsonResponse({ username: "artem" });
+      }
+      if (url.includes("/api/notes/") && init?.method === "DELETE") {
+        return jsonResponse({ id: "2026-02-13T09:42", deleted: true });
+      }
+      if (url.endsWith("/api/days/2026-02-13")) {
+        dayGetCount += 1;
+        return jsonResponse(dayGetCount === 1 ? day13 : day13AfterDelete);
+      }
+      if (url.includes("/api/days?month=2026-02")) {
+        return jsonResponse(monthPayload);
+      }
+
+      return jsonResponse({ detail: `Unexpected request: ${url}` }, 500);
+    });
+
+    await renderJournal();
+    await userEvent.click((await screen.findAllByRole("button", { name: "DELETE" }))[0]);
+
+    expect(await screen.findByText("DELETE THIS NOTE?")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/notes/2026-02-13T09%3A42",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "CONFIRM DELETE" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Today I built the first map prototype.")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Evening reflection.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/notes/2026-02-13T09%3A42",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        body: JSON.stringify({ expected_sha256: "sha-13-0942" }),
       }),
     );
   });

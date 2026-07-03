@@ -1,3 +1,5 @@
+import { monthFirstInWeek } from "./monthLabels";
+
 const dayMs = 24 * 60 * 60 * 1000;
 
 export type CalendarLayoutDay = {
@@ -23,8 +25,6 @@ export type CalendarYearBlock<TDay extends CalendarLayoutDay> = {
   monthLabels: CalendarMonthLabel[];
   weekCount: number;
 };
-
-const monthLabels = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
 export function buildCalendarYearBlocks<TDay extends CalendarLayoutDay>(
   days: TDay[],
@@ -70,16 +70,17 @@ function buildYearBlock<TDay extends CalendarLayoutDay>(
     });
   }
 
+  const weekCount = Math.ceil(cells.length / 7);
+
   return {
     year,
     cells,
-    monthLabels: monthLabels.map((label, month) => ({
-      label,
-      weekIndex: Math.floor(
-        (startOfIsoWeek(new Date(Date.UTC(year, month, 1))).getTime() - start.getTime()) / (7 * dayMs),
-      ),
-    })),
-    weekCount: Math.ceil(cells.length / 7),
+    monthLabels: Array.from({ length: weekCount }, (_, weekIndex) => {
+      const weekStart = new Date(start.getTime() + weekIndex * 7 * dayMs);
+      const label = monthFirstInWeek(weekStart);
+      return label && label.date.startsWith(`${year}-`) ? { label: label.label, weekIndex } : null;
+    }).filter((label): label is CalendarMonthLabel => label !== null),
+    weekCount,
   };
 }
 

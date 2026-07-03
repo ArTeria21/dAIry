@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from dairy_bot.services.note_editing import (
+    delete_note_block,
     NoteEditConflict,
     NoteEditNotFound,
     NoteEditValidationError,
@@ -156,6 +157,99 @@ def test_replace_note_text_rejects_stale_hash_and_missing_blocks_without_changes
             note_path="2026/06/2026-06-16.md",
             expected_sha256=note_text_sha256("Original text."),
             new_text="Updated.",
+        )
+
+
+def test_delete_note_block_removes_entire_block_and_collapses_neighbor_boundary():
+    content = "\n".join(
+        [
+            "---",
+            "summary: Existing",
+            "---",
+            "",
+            "# 2026-06-16",
+            "",
+            "## 09:00 — text",
+            "",
+            "First text.",
+            "",
+            "## 10:00 — voice",
+            "",
+            "Delete me.",
+            "<!-- dairy:note-enrichment -->",
+            "mood:: calm · topics:: work",
+            "",
+            "",
+            "## 11:00 — text",
+            "",
+            "Last text.",
+            "",
+        ]
+    )
+
+    result = delete_note_block(
+        content=content,
+        note_id="2026-06-16T10:00",
+        note_path="2026/06/2026-06-16.md",
+        expected_sha256=note_text_sha256("Delete me."),
+    )
+
+    assert result.content.startswith("---\nsummary: Existing\n---\n\n# 2026-06-16")
+    assert "## 10:00 — voice" not in result.content
+    assert "Delete me." not in result.content
+    assert "<!-- dairy:note-enrichment -->" not in result.content
+    assert "mood:: calm · topics:: work" not in result.content
+    assert "## 09:00 — text\n\nFirst text.\n## 11:00" not in result.content
+    assert "## 09:00 — text\n\nFirst text.\n## 11:00" not in result.content
+    assert "## 09:00 — text\n\nFirst text.\n\n## 11:00 — text\n\nLast text." in result.content
+
+
+def test_delete_note_block_keeps_day_file_when_last_block_is_removed():
+    content = "\n".join(
+        [
+            "---",
+            "date: 2026-06-16",
+            "---",
+            "",
+            "# 2026-06-16",
+            "",
+            "[[2026-06-15|Prev]] · [[2026-06-17|Next]]",
+            "",
+            "## 09:00",
+            "",
+            "Only note.",
+            "<!-- dairy:note-enrichment -->",
+            "mood:: calm · topics:: work",
+        ]
+    )
+
+    result = delete_note_block(
+        content=content,
+        note_id="2026-06-16T09:00",
+        note_path="2026/06/2026-06-16.md",
+        expected_sha256=note_text_sha256("Only note."),
+    )
+
+    assert result.content == "---\ndate: 2026-06-16\n---\n\n# 2026-06-16\n\n[[2026-06-15|Prev]] · [[2026-06-17|Next]]\n"
+
+
+def test_delete_note_block_rejects_stale_hash_and_missing_blocks_without_changes():
+    content = "## 09:00\n\nOriginal text.\n"
+
+    with pytest.raises(NoteEditConflict):
+        delete_note_block(
+            content=content,
+            note_id="2026-06-16T09:00",
+            note_path="2026/06/2026-06-16.md",
+            expected_sha256=note_text_sha256("Other text."),
+        )
+
+    with pytest.raises(NoteEditNotFound):
+        delete_note_block(
+            content=content,
+            note_id="2026-06-16T10:00",
+            note_path="2026/06/2026-06-16.md",
+            expected_sha256=note_text_sha256("Original text."),
         )
 
 

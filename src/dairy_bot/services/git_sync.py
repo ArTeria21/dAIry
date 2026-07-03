@@ -117,11 +117,20 @@ class GitService:
     def _has_staged_changes(self, repo: Repo) -> bool:
         return bool(repo.git.diff("--cached", "--name-only").strip())
 
-    def _commit_staged_changes(self, repo: Repo, message_prefix: str) -> bool:
+    def _commit_staged_changes(
+        self,
+        repo: Repo,
+        message_prefix: str,
+        *,
+        commit_message: str | None = None,
+    ) -> bool:
         if not self._has_staged_changes(repo):
             return False
-        timestamp = datetime.now(self.timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
-        repo.index.commit(f"{message_prefix}: {timestamp}")
+        message = commit_message
+        if message is None:
+            timestamp = datetime.now(self.timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
+            message = f"{message_prefix}: {timestamp}"
+        repo.index.commit(message)
         return True
 
     def _ensure_clean_worktree(self, repo: Repo) -> None:
@@ -197,7 +206,12 @@ class GitService:
         """Save existing changes and synchronize before writing."""
         self.sync_from_remote(autocommit_dirty=True)
 
-    def commit_and_push(self, file_paths: Path | Sequence[Path] | None = None) -> GitSyncResult:
+    def commit_and_push(
+        self,
+        file_paths: Path | Sequence[Path] | None = None,
+        *,
+        commit_message: str | None = None,
+    ) -> GitSyncResult:
         """Add changes to the index, create a commit, and push it to remote."""
         if not self.enabled:
             return GitSyncResult(pushed=True)
@@ -211,7 +225,11 @@ class GitService:
 
         try:
             self._stage_all_changes(repo)
-            if not self._commit_staged_changes(repo, "Journal entry"):
+            if not self._commit_staged_changes(
+                repo,
+                "Journal entry",
+                commit_message=commit_message,
+            ):
                 return GitSyncResult(pushed=True)
 
             tracking_ref = self._tracking_ref_name(repo)

@@ -72,9 +72,11 @@ class FakeStore:
 class FakeProjector:
     def __init__(self):
         self.calls = 0
+        self.input_dimensions: list[int] = []
 
     def project(self, vectors):
         self.calls += 1
+        self.input_dimensions.extend(len(vector) for vector in vectors)
         return [(float(index), float(index + 10)) for index, _ in enumerate(vectors)]
 
 
@@ -209,7 +211,39 @@ def test_S1_2_clusterer_receives_reduced_vectors_not_raw_embeddings(tmp_path):
 
     assert cached.n_noise == 0
     assert set(reducer.input_dimensions) == {1024}
+    assert set(projector.input_dimensions) == {10}
     assert set(clusterer.input_dimensions) == {10}
+
+
+def test_sprint_7_projector_uses_reduced_vectors_only_at_cluster_boundary(tmp_path):
+    clustered_projector = FakeProjector()
+    clustered_reducer = FakeReducer(dimensions=7)
+    clustered = AnalysisService(
+        store=FakeStore(notes(15, dimensions=1024)),
+        cache=AnalysisCache(tmp_path / "clustered.sqlite3"),
+        projector=clustered_projector,
+        reducer=clustered_reducer,
+        clusterer=FakeClusterer([1] * 15),
+        labeler=FakeLabeler(),
+        now=fixed_now,
+    )
+    unclustered_projector = FakeProjector()
+    unclustered = AnalysisService(
+        store=FakeStore(notes(14, dimensions=1024)),
+        cache=AnalysisCache(tmp_path / "unclustered.sqlite3"),
+        projector=unclustered_projector,
+        reducer=FakeReducer(dimensions=7),
+        clusterer=FakeClusterer([1] * 14),
+        labeler=FakeLabeler(),
+        now=fixed_now,
+    )
+
+    clustered.get_map()
+    unclustered.get_map()
+
+    assert set(clustered_reducer.input_dimensions) == {1024}
+    assert set(clustered_projector.input_dimensions) == {7}
+    assert set(unclustered_projector.input_dimensions) == {1024}
 
 
 def test_AC_4_force_rebuild_ignores_matching_cache_and_recomputes(tmp_path):

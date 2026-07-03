@@ -70,3 +70,24 @@
 **Отклонения от спеки:** нет.
 **Грабли/наблюдения:** S5-6 решён по спеке: одновременно допустимы orange-обводки активного mood-чипа, активного topic-чипа и выбранной day-cell; это осознанное уточнение к глобальному G9 для Seasons. `Legend` получил `disabled` items для некликабельного OTHER. Calendar layout строит блоки по полным календарным годам от недели с 1 января до недели с 31 декабря; хвосты соседних лет пустые и некликабельные.
 **Backlog-наблюдения:** Stream tooltip сейчас реализован как SVG `title` на слой с неделей максимального count; если нужен настоящий per-week hover, стоит добавить pointer-position hit testing поверх stacked data.
+
+## [2026-07-03] Инцидент: чистка рабочей директории — restored
+**Агент:** Claude (Fable 5), сессия ревью.
+**Сделано:** После мержа PR #1 в main обнаружена локальная чистка: tracked-файлы `plan/sprint_1–5_spec.md` и `plan/worklog.md` были удалены с диска (восстановлены через `git restore plan/`); незакоммиченные `fable_report.md`, `code_review.md`, `plan/README.md`, `plan/agent_prompt.md` стёрты (README и agent_prompt пересозданы; report и review — только по запросу пользователя).
+**Отклонения от спеки:** —
+**Грабли/наблюдения:** `plan` числится в `.gitignore` (наряду с `task.md`, `design.md`, `AGENTS.md`) — файлы плана попали в git только через `git add -f`. Любой `git clean -fdx` уничтожает незакоммиченные документы плана. Рекомендация: снять `plan` из `.gitignore`. Ссылки на `code_review.md` в sprint_7_spec не критичны — все P2-решения продублированы в самой спеке (АР-5).
+**Backlog-наблюдения:** Запись за спринт 6 (фиксы по code review, коммит `bugfix` d9fdcf8) в worklog отсутствует — sprint_7_spec требует восстановить её задним числом.
+
+## [2026-07-03] Sprint 6 — done (восстановлено задним числом)
+**Агент:** Claude (Fable 5) + локальный commit `bugfix` d9fdcf8.
+**Сделано:** Закрыт review-tail перед Sprint 7: усилены parser/raw-text edge cases, duplicate/managed-block тесты, hash/reload поведение редактора, map coordinate/interaction regressions и Seasons regressions.
+**Отклонения от спеки:** исходной sprint_6_spec в рабочем дереве нет; запись восстановлена кратко по фактическому diff commit `d9fdcf8`.
+**Грабли/наблюдения:** `code_review.md` после инцидента чистки отсутствует; для Sprint 7 использовать продублированный P2-хвост из `plan/sprint_7_spec.md`. Коммит назывался просто `bugfix`, не по sprint-формату.
+**Backlog-наблюдения:** Стоит восстановить/закоммитить `code_review.md` или убрать ссылки на него из будущих спек, чтобы следующие агенты не искали несуществующий файл.
+
+## [2026-07-03] Sprint 7 — done
+**Агент:** GPT-5 Codex.
+**Сделано:** Карта строит 2D-проекцию от reduced-пространства при `N >= 15`, hull-rects удалены, cluster labels стали медианными/collision-aware и видны только в CLUSTER; TOPIC default стал Slate, selected/dimmed — Ink/Mortar. Добавлено удаление заметок через bot internal API -> layer3 DELETE -> Reader/NotePanel с подтверждением; reconcile чистит `notes`/`note_entry_state` для исчезнувших ids и duplicate shifts. Закрыт P2-хвост: timeline coercion, NotePanel generation guard, fixed-height legend, stream tooltip, общий month-label helper, README embedding-model update, NoteEditor/Button contrast.
+**Отклонения от спеки:** `code_review.md` отсутствовал, использована продублированная секция P2 из `sprint_7_spec`. Browser screenshot QA/dev server не запускались; поведение покрыто DOM/unit/integration tests. В root `src/dairy_bot/config.py` и тестах клиента старый `openai/text-embedding-3-small` оставлен вне scope, т.к. AC-11 требовал только README.
+**Грабли/наблюдения:** Смена входа 2D-проектора не меняет подпись cache, поэтому после деплоя нужен один авторизованный `POST /api/rebuild`. `GitService.commit_and_push` получил optional `commit_message`; delete API передаёт `web delete: {note_id}`, existing edit-flow остаётся на старом timestamp prefix. Grep по `chromeTextClass` + `text-*` нашёл много label/link cases, но реальный black-on-black риск был в dark buttons; он убран через `chromeBaseClass` в `Button` и regression test.
+**Backlog-наблюдения:** Хорошо бы снять `plan`/`journal` broad ignore rules, чтобы `plan/*` и `web/frontend/src/journal/*` не требовали `git add -f`. Для visual QA карты всё ещё полезен authenticated mock/dev fixture без реального дневника.

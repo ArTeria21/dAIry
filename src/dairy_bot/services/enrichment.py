@@ -148,6 +148,7 @@ async def enrich_daily_note_notes_with_results(
 ) -> NoteEnrichmentRun:
     content = await read_text(note_path)
     entries = parse_daily_entries(content, note_path)
+    rel_path = str(note_path.relative_to(journal_dir))
     pending: list[tuple[DailyEntry, NoteEnrichment, list[float]]] = []
     changed_results: list[NoteEnrichmentResult] = []
 
@@ -178,12 +179,15 @@ async def enrich_daily_note_notes_with_results(
         )
 
     if not pending:
+        store.delete_notes_missing_from_path(
+            rel_path,
+            {entry.entry_id for entry in entries},
+        )
         return NoteEnrichmentRun(changed=False, results=[])
 
     enriched_by_id = {entry.entry_id: enrichment for entry, enrichment, _ in pending}
     updated_content = _render_note_enrichments(content, entries, enriched_by_id)
     await write_text(note_path, updated_content)
-    rel_path = str(note_path.relative_to(journal_dir))
 
     for entry, enrichment, embedding in pending:
         store.upsert_note(
@@ -195,6 +199,7 @@ async def enrich_daily_note_notes_with_results(
             embedding=embedding,
             content_hash=entry.content_hash,
         )
+    store.delete_notes_missing_from_path(rel_path, {entry.entry_id for entry in entries})
 
     return NoteEnrichmentRun(changed=True, results=changed_results)
 

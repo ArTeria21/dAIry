@@ -1,6 +1,6 @@
 import type { InputHTMLAttributes, ReactNode } from "react";
 
-import { chromeTextClass, readingTextClass } from "../design/theme";
+import { chromeBaseClass, chromeTextClass, readingTextClass } from "../design/theme";
 import { cx } from "./classNames";
 
 type ButtonVariant = "orange" | "dark" | "ghost";
@@ -23,7 +23,7 @@ export function Button({
   return (
     <button
       className={cx(
-        chromeTextClass,
+        chromeBaseClass,
         "rounded-[2px] px-4 py-2 text-[11px] font-medium transition-colors",
         "disabled:cursor-not-allowed disabled:opacity-50",
         variant === "orange" && "bg-signal-orange text-pure-white",

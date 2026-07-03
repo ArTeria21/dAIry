@@ -277,12 +277,13 @@ class AnalysisService:
             return snapshot
 
         vectors = _embedding_matrix(notes)
-        coordinates = self._project_coordinates(notes, vectors)
         if len(notes) < MIN_NOTES_FOR_CLUSTERING:
+            coordinates = self._project_coordinates(notes, vectors)
             labels = [-1] * len(notes)
         else:
             reduced_vectors = self.reducer.reduce(vectors)
             labels = self.clusterer.cluster(reduced_vectors)
+            coordinates = self._project_coordinates(notes, reduced_vectors)
         if len(coordinates) != len(notes) or len(labels) != len(notes):
             raise ValueError("Projection and cluster lengths must match note count")
 

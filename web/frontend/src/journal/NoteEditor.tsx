@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
 import { chromeTextClass, readingTextClass } from "../design/theme";
-import { NoteEditError, saveNoteText } from "../services/notes";
+import { deleteNote, NoteEditError, saveNoteText } from "../services/notes";
 import { cx } from "../ui/classNames";
+import { Button } from "../ui/primitives";
 
 type NoteEditorProps = {
   noteId: string;
   rawText: string;
   rawTextSha256: string;
   onReload: () => Promise<ReloadedNoteText | null>;
+  onDeleted?: (status: string) => Promise<void> | void;
 };
 
 type ReloadedNoteText = {
@@ -18,13 +20,16 @@ type ReloadedNoteText = {
 
 const savedStatus = "SAVED · ENRICHMENT WILL UPDATE LATER";
 const reloadedStatus = "NOTE CHANGED ELSEWHERE — RELOADED";
+const deletedStatus = "NOTE DELETED · MAP WILL UPDATE AFTER RE-ENRICHMENT";
 
-export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEditorProps) {
+export function NoteEditor({ noteId, onDeleted, onReload, rawText, rawTextSha256 }: NoteEditorProps) {
   const [editing, setEditing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [draft, setDraft] = useState(rawText);
   const [unsavedVersion, setUnsavedVersion] = useState("");
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [disabled, setDisabled] = useState(false);
   const [pendingReloadSync, setPendingReloadSync] = useState(false);
   const [savedReloadBaselineSha, setSavedReloadBaselineSha] = useState("");
@@ -51,22 +56,44 @@ export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEdi
     return (
       <div className="grid gap-2">
         {status ? <p className={cx(chromeTextClass, "text-[10px] text-slate")}>{status}</p> : null}
-        <button
-          className={cx(
-            chromeTextClass,
-            "w-fit rounded-[2px] border border-hairline px-3 py-2 text-[10px] text-slate disabled:opacity-50",
-          )}
-          disabled={disabled || saving}
-          onClick={() => {
-            setEditing(true);
-            setDraft(rawText);
-            setUnsavedVersion("");
-            setStatus("");
-          }}
-          type="button"
-        >
-          EDIT
-        </button>
+        {confirmingDelete ? (
+          <div className="grid gap-2">
+            <p className={cx(chromeTextClass, "text-[10px] text-slate")}>DELETE THIS NOTE?</p>
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={deleting} onClick={confirmDelete} variant="dark">
+                CONFIRM DELETE
+              </Button>
+              <Button disabled={deleting} onClick={() => setConfirmingDelete(false)} variant="ghost">
+                CANCEL
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={disabled || saving || deleting}
+              onClick={() => {
+                setEditing(true);
+                setDraft(rawText);
+                setUnsavedVersion("");
+                setStatus("");
+              }}
+              variant="ghost"
+            >
+              EDIT
+            </Button>
+            <Button
+              disabled={disabled || saving || deleting}
+              onClick={() => {
+                setConfirmingDelete(true);
+                setStatus("");
+              }}
+              variant="ghost"
+            >
+              DELETE
+            </Button>
+          </div>
+        )}
       </div>
     );
   }
@@ -109,6 +136,40 @@ export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEdi
     }
   }
 
+  async function confirmDelete() {
+    setDeleting(true);
+    setStatus("");
+    try {
+      await deleteNote(noteId, rawTextSha256);
+      setConfirmingDelete(false);
+      setDisabled(true);
+      setStatus(deletedStatus);
+      await onDeleted?.(deletedStatus);
+    } catch (error) {
+      setConfirmingDelete(false);
+      if (error instanceof NoteEditError && error.status === 409) {
+        try {
+          pendingReloadTextRef.current = await onReload();
+          setPendingReloadSync(true);
+          setStatus(reloadedStatus);
+        } catch {
+          setStatus("RELOAD FAILED");
+        }
+      } else if (error instanceof NoteEditError && error.status === 404) {
+        setDisabled(true);
+        setStatus("NOTE ALREADY DELETED");
+        await onDeleted?.("NOTE ALREADY DELETED");
+      } else if (error instanceof NoteEditError && error.status === 502) {
+        setDisabled(true);
+        setStatus("EDITING DISABLED");
+      } else {
+        setStatus("DELETE FAILED");
+      }
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className="grid gap-3">
       {status ? <p className={cx(chromeTextClass, "text-[10px] text-slate")}>{status}</p> : null}
@@ -122,19 +183,10 @@ export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEdi
         value={draft}
       />
       <div className="flex flex-wrap gap-2">
-        <button
-          className={cx(
-            chromeTextClass,
-            "rounded-[2px] bg-ink-black px-3 py-2 text-[10px] text-cream-paper disabled:opacity-50",
-          )}
-          disabled={saving}
-          onClick={save}
-          type="button"
-        >
+        <Button disabled={saving} onClick={save} variant="dark">
           SAVE
-        </button>
-        <button
-          className={cx(chromeTextClass, "rounded-[2px] border border-hairline px-3 py-2 text-[10px] text-slate")}
+        </Button>
+        <Button
           disabled={saving}
           onClick={() => {
             setEditing(false);
@@ -142,10 +194,10 @@ export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEdi
             setUnsavedVersion("");
             setStatus("");
           }}
-          type="button"
+          variant="ghost"
         >
           CANCEL
-        </button>
+        </Button>
       </div>
       {unsavedVersion ? (
         <div className="grid gap-2 rounded-[2px] border border-hairline p-3">

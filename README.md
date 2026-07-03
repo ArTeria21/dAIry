@@ -125,7 +125,7 @@ TOC_MAX_TAGS=5
 # Enrichment
 ENRICHMENT_ENABLED=true
 ENRICHMENT_MODEL_NAME=openai/gpt-4.1-mini
-EMBEDDING_MODEL_NAME=openai/text-embedding-3-small
+EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-large
 ENRICHMENT_DB_PATH=data/enrichment.sqlite3
 
 # Layer 3 web analytics
@@ -157,7 +157,7 @@ SSH_KEY_PATH=/Users/artem/.ssh/id_ed25519
 
 `TOC_MODEL_NAME` используется только для TOC enrichment: модель делает короткое summary и выбирает теги для `table_of_contents.md`.
 
-`ENRICHMENT_MODEL_NAME` используется для note-level и day-level structured output. `EMBEDDING_MODEL_NAME` используется для embedding каждой note-level записи; оставляйте здесь embedding-модель, например `openai/text-embedding-3-small`, а не chat-модель или экспериментальный slug. SQLite cache хранится в `data/enrichment.sqlite3`; папка `data/` добавлена в `.gitignore`, потому что база является локальным пересобираемым кэшем, а не source of truth.
+`ENRICHMENT_MODEL_NAME` используется для note-level и day-level structured output. `EMBEDDING_MODEL_NAME` используется для embedding каждой note-level записи; оставляйте здесь embedding-модель, например `intfloat/multilingual-e5-large` (1024-мерные embedding'и), а не chat-модель или экспериментальный slug. SQLite cache хранится в `data/enrichment.sqlite3`; папка `data/` добавлена в `.gitignore`, потому что база является локальным пересобираемым кэшем, а не source of truth.
 
 Если нужен временный capture-only режим без дополнительных LLM/embedding вызовов, поставьте:
 

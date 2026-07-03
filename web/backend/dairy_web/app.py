@@ -47,8 +47,14 @@ class NoteEditRequest(BaseModel):
     expected_sha256: str
 
 
+class NoteDeleteRequest(BaseModel):
+    expected_sha256: str
+
+
 class BotEditClient(Protocol):
     def replace_text(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]: ...
+
+    def delete_note(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]: ...
 
 
 class HttpBotEditClient:
@@ -63,11 +69,24 @@ class HttpBotEditClient:
                 json=payload,
                 headers={"X-Edit-Token": self.token},
             )
-        try:
-            body = response.json()
-        except ValueError:
-            body = {}
-        return response.status_code, body
+        return _decode_bot_response(response)
+
+    def delete_note(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                f"{self.base_url}/internal/notes/delete",
+                json=payload,
+                headers={"X-Edit-Token": self.token},
+            )
+        return _decode_bot_response(response)
+
+
+def _decode_bot_response(response: httpx.Response) -> tuple[int, dict[str, object]]:
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    return response.status_code, body
 
 
 def create_app(
@@ -298,6 +317,38 @@ def create_app(
             raise HTTPException(
                 status_code=status,
                 detail=detail if isinstance(detail, str) else "edit failed",
+            )
+        raise HTTPException(status_code=502, detail="editing disabled")
+
+    @app.delete("/api/notes/{note_id}")
+    def delete_note(
+        note_id: str,
+        payload: NoteDeleteRequest,
+        username: str = Depends(current_username),
+    ) -> dict[str, object]:
+        del username
+        note = store.get_note(note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="Note not found")
+        if edit_client is None:
+            raise HTTPException(status_code=502, detail="editing disabled")
+        try:
+            status, body = edit_client.delete_note(
+                {
+                    "note_id": note.id,
+                    "note_path": note.note_path,
+                    "expected_sha256": payload.expected_sha256,
+                }
+            )
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="editing disabled") from exc
+        if status == 200 and body.get("deleted") is True:
+            return {"id": note.id, "deleted": True}
+        if status in {404, 409, 422}:
+            detail = body.get("detail")
+            raise HTTPException(
+                status_code=status,
+                detail=detail if isinstance(detail, str) else "delete failed",
             )
         raise HTTPException(status_code=502, detail="editing disabled")
 
