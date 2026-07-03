@@ -11,6 +11,14 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function deferredResponse() {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 const day13 = {
   date: "2026-02-13",
   prev_date: "2026-02-12",
@@ -217,6 +225,67 @@ describe("Sprint 3 journal reader", () => {
     expect(await screen.findByText("NOTE CHANGED ELSEWHERE — RELOADED")).toBeInTheDocument();
     expect(screen.getByText("YOUR UNSAVED VERSION")).toBeInTheDocument();
     expect(screen.getByText("My unsaved version.")).toBeInTheDocument();
+  });
+
+  it("waits for the delayed 409 reload before showing reloaded status", async () => {
+    const reload = deferredResponse();
+    let dayGetCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+
+      if (url.endsWith("/api/auth/me")) {
+        return jsonResponse({ username: "artem" });
+      }
+      if (url.includes("/api/notes/") && init?.method === "PUT") {
+        return jsonResponse({ detail: "edit failed" }, 409);
+      }
+      if (url.endsWith("/api/days/2026-02-13")) {
+        dayGetCount += 1;
+        return dayGetCount === 1 ? jsonResponse(day13) : reload.promise;
+      }
+      if (url.includes("/api/days?month=2026-02")) {
+        return jsonResponse(monthPayload);
+      }
+
+      return jsonResponse({ detail: `Unexpected request: ${url}` }, 500);
+    });
+
+    await renderJournal();
+    await userEvent.click((await screen.findAllByRole("button", { name: "EDIT" }))[0]);
+    const textarea = screen.getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "My unsaved version.");
+    await userEvent.click(screen.getByRole("button", { name: "SAVE" }));
+
+    expect(screen.queryByText("NOTE CHANGED ELSEWHERE — RELOADED")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("My unsaved version.");
+
+    reload.resolve(
+      jsonResponse({
+        ...day13,
+        notes: [
+          {
+            ...day13.notes[0],
+            raw_text: "Server changed this note before reload finished.",
+            raw_text_sha256: "server-changed-sha",
+          },
+          day13.notes[1],
+        ],
+      }),
+    );
+
+    expect(await screen.findByText("NOTE CHANGED ELSEWHERE — RELOADED")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("Server changed this note before reload finished.");
+    expect(screen.getByText("YOUR UNSAVED VERSION")).toBeInTheDocument();
+    expect(screen.getByText("My unsaved version.")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).not.toBeDisabled();
+    });
+    await userEvent.clear(screen.getByRole("textbox"));
+    await userEvent.type(screen.getByRole("textbox"), "Manual retry after reload.");
+
+    expect(screen.getByRole("textbox")).toHaveValue("Manual retry after reload.");
   });
 
   it("502 shows editing disabled", async () => {

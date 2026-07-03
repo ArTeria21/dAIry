@@ -25,7 +25,7 @@ const mapPayload = {
   n_noise: 0,
   points: [
     {
-      id: 1,
+      id: "1",
       x: 0.2,
       y: 0.7,
       cluster_id: 0,
@@ -36,7 +36,7 @@ const mapPayload = {
       ts: "2026-02-13T09:42:00Z",
     },
     {
-      id: 2,
+      id: "2",
       x: 0.8,
       y: 0.3,
       cluster_id: 1,
@@ -54,7 +54,7 @@ const mapPayload = {
 };
 
 const notePayload = {
-  id: 1,
+  id: "1",
   date: "2026-02-13",
   ts: "2026-02-13T09:42:00Z",
   mood: "calm",
@@ -104,6 +104,45 @@ function installFetchMock({
   });
 }
 
+function installMapEditFetchMock({
+  map = mapPayload,
+  noteId = "1",
+  initialNote = notePayload,
+  putStatus = 200,
+  reloadedNote = notePayload,
+}: {
+  map?: unknown;
+  noteId?: string;
+  initialNote?: unknown;
+  putStatus?: number;
+  reloadedNote?: unknown;
+} = {}) {
+  let noteGetCount = 0;
+  const noteUrl = `/api/notes/${encodeURIComponent(noteId)}`;
+
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = input instanceof Request ? input : null;
+    const url = typeof input === "string" ? input : request ? request.url : input.toString();
+    const method = init?.method ?? request?.method ?? "GET";
+
+    if (url.endsWith("/api/auth/me")) {
+      return jsonResponse({ username: "artem" });
+    }
+    if (url.endsWith("/api/map")) {
+      return jsonResponse(map);
+    }
+    if (url.endsWith(noteUrl) && method === "GET") {
+      noteGetCount += 1;
+      return jsonResponse(noteGetCount === 1 ? initialNote : reloadedNote);
+    }
+    if (url.endsWith(noteUrl) && method === "PUT") {
+      return jsonResponse({ id: noteId, new_sha256: "edited-note-sha" }, putStatus);
+    }
+
+    return jsonResponse({ detail: `Unexpected request: ${url}` }, 500);
+  });
+}
+
 async function renderAuthenticatedMap() {
   window.location.hash = "#map";
   render(<App />);
@@ -135,7 +174,9 @@ function installMapViewportRect() {
   });
 }
 
-function mapWithPoints(points: Array<Partial<(typeof mapPayload.points)[number]> & { id: number; x: number; y: number }>) {
+function mapWithPoints(
+  points: Array<Partial<Omit<(typeof mapPayload.points)[number], "id">> & { id: string | number; x: number; y: number }>,
+) {
   return {
     ...mapPayload,
     signature: `notes:${points.length}:wide`,
@@ -147,6 +188,7 @@ function mapWithPoints(points: Array<Partial<(typeof mapPayload.points)[number]>
       date: "2026-02-13",
       ts: "2026-02-13T09:42:00Z",
       ...point,
+      id: String(point.id),
     })),
     clusters: [{ id: 0, label: "work", size: points.length, dominant_topics: ["work"] }],
   };
@@ -298,7 +340,7 @@ describe("Phase 3 map view", () => {
     expect(noisePoint.style.getPropertyValue("--point-color")).toBe(noiseColor);
 
     await userEvent.click(screen.getByRole("button", { name: "HOME" }));
-    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(noiseColor);
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicMutedColor);
   });
 
   it("renders only the UNCLUSTERED legend chip when every point is noise", async () => {
@@ -370,6 +412,42 @@ describe("Phase 3 map view", () => {
     );
   });
 
+  it("MOOD mode colors and filters noise points by their mood", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 1,
+        points: [
+          ...mapPayload.points,
+          {
+            id: 3,
+            x: 0.5,
+            y: 0.5,
+            cluster_id: -1,
+            mood: "calm",
+            topics: ["loose"],
+            gist: "Noise point with a calm mood.",
+            date: "2026-02-15",
+            ts: "2026-02-15T10:00:00Z",
+          },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "MOOD" }));
+    const noisePoint = screen.getByRole("button", { name: "NOTE 3" });
+
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(moodPalette.calm);
+
+    await userEvent.click(screen.getByRole("button", { name: "JOY" }));
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicMutedColor);
+
+    await userEvent.click(screen.getByRole("button", { name: "JOY" }));
+    await userEvent.click(screen.getByRole("button", { name: "CALM" }));
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(moodPalette.calm);
+  });
+
   it("switching color modes resets highlight without changing the legend frame height", async () => {
     installFetchMock();
 
@@ -424,6 +502,41 @@ describe("Phase 3 map view", () => {
     );
   });
 
+  it("TOPIC mode includes noise points in topic filtering", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 1,
+        points: [
+          ...mapPayload.points,
+          {
+            id: 3,
+            x: 0.5,
+            y: 0.5,
+            cluster_id: -1,
+            mood: "calm",
+            topics: ["loose"],
+            gist: "Noise point with its own topic.",
+            date: "2026-02-15",
+            ts: "2026-02-15T10:00:00Z",
+          },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "TOPIC" }));
+    const noisePoint = screen.getByRole("button", { name: "NOTE 3" });
+
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicPointColor);
+
+    await userEvent.click(screen.getByRole("button", { name: "LOOSE" }));
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicPointHighlightColor);
+    expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
+      topicMutedColor,
+    );
+  });
+
   it("hover shows the gist tooltip and click opens the raw-note side panel", async () => {
     const fetchMock = installFetchMock();
 
@@ -454,6 +567,71 @@ describe("Phase 3 map view", () => {
     expect(openDay).toHaveAttribute("href", "#journal/2026-02-13");
   });
 
+  it("opens and saves map notes with duplicate timestamp string ids using encoded URLs", async () => {
+    const duplicateId = "2026-06-08T21:23#2";
+    const encodedNoteUrl = `/api/notes/${encodeURIComponent(duplicateId)}`;
+    const duplicateNote = {
+      ...notePayload,
+      id: duplicateId,
+      date: "2026-06-08",
+      ts: "2026-06-08T21:23:00Z",
+      gist: "Second duplicate point.",
+      raw_text: "Second duplicate map note.",
+      raw_text_sha256: "second-duplicate-sha",
+    };
+    const fetchMock = installMapEditFetchMock({
+      map: {
+        ...mapPayload,
+        points: [
+          {
+            ...mapPayload.points[0],
+            id: duplicateId,
+            date: "2026-06-08",
+            ts: "2026-06-08T21:23:00Z",
+            gist: "Second duplicate point.",
+          },
+        ],
+        clusters: [{ id: 0, label: "work", size: 1, dominant_topics: ["work", "focus"] }],
+      },
+      noteId: duplicateId,
+      initialNote: duplicateNote,
+      reloadedNote: {
+        ...duplicateNote,
+        raw_text: "Second duplicate edited from map.",
+        raw_text_sha256: "second-duplicate-edited-sha",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: `NOTE ${duplicateId}` }));
+    const panel = await screen.findByRole("complementary", { name: `NOTE ${duplicateId} DETAILS` });
+
+    expect(fetchMock).toHaveBeenCalledWith(encodedNoteUrl, expect.objectContaining({ credentials: "include" }));
+    expect(within(panel).getByText("Second duplicate map note.")).toBeInTheDocument();
+
+    await userEvent.click(within(panel).getByRole("button", { name: "EDIT" }));
+    const textarea = within(panel).getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "Second duplicate edited from map.");
+    await userEvent.click(within(panel).getByRole("button", { name: "SAVE" }));
+
+    expect(await within(panel).findByText("Second duplicate edited from map.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(panel).queryByText("SAVED · ENRICHMENT WILL UPDATE LATER")).not.toBeInTheDocument();
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      encodedNoteUrl,
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        body: JSON.stringify({
+          new_text: "Second duplicate edited from map.",
+          expected_sha256: "second-duplicate-sha",
+        }),
+      }),
+    );
+  });
+
   it("hides the day summary block when the note has no summary", async () => {
     installFetchMock({
       note: {
@@ -467,6 +645,58 @@ describe("Phase 3 map view", () => {
 
     const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
     expect(within(panel).queryByText("DAY SUMMARY")).not.toBeInTheDocument();
+  });
+
+  it("409 from NotePanel save keeps the attempted edit visible after reloading server text", async () => {
+    installMapEditFetchMock({
+      putStatus: 409,
+      reloadedNote: {
+        ...notePayload,
+        raw_text: "Server changed this note before the map save completed.",
+        raw_text_sha256: "server-changed-sha",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    await userEvent.click(within(panel).getByRole("button", { name: "EDIT" }));
+    const textarea = within(panel).getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "My unsaved map-panel version.");
+
+    await userEvent.click(within(panel).getByRole("button", { name: "SAVE" }));
+
+    expect(await within(panel).findByText("NOTE CHANGED ELSEWHERE — RELOADED")).toBeInTheDocument();
+    expect(within(panel).getByRole("textbox")).toHaveValue("Server changed this note before the map save completed.");
+    expect(within(panel).getByText("YOUR UNSAVED VERSION")).toBeInTheDocument();
+    expect(within(panel).getByText("My unsaved map-panel version.")).toBeInTheDocument();
+  });
+
+  it("successful NotePanel save reloads fresh text without leaving a stale saved status", async () => {
+    installMapEditFetchMock({
+      reloadedNote: {
+        ...notePayload,
+        raw_text: "Saved from the map note panel.",
+        raw_text_sha256: "saved-map-sha",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    await userEvent.click(within(panel).getByRole("button", { name: "EDIT" }));
+    const textarea = within(panel).getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "Saved from the map note panel.");
+
+    await userEvent.click(within(panel).getByRole("button", { name: "SAVE" }));
+
+    expect(await within(panel).findByText("Saved from the map note panel.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(panel).queryByText("SAVED · ENRICHMENT WILL UPDATE LATER")).not.toBeInTheDocument();
+    });
+    expect(within(panel).getByRole("button", { name: "EDIT" })).toBeInTheDocument();
   });
 
   it("renders an empty map state with no note point controls", async () => {

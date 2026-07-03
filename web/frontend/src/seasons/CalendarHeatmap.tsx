@@ -84,7 +84,7 @@ export function CalendarHeatmap({
                     key={`${block.year}-${cell.date}`}
                     muted={isMuted(cell.day, selectedMood, selectedTopic, topicsByDate)}
                     onSelectDay={onSelectDay}
-                    selected={selectedDay?.date === cell.day?.date}
+                    selected={cell.day !== null && selectedDay?.date === cell.day.date}
                     weekIndex={cell.weekIndex}
                   />
                 ))}

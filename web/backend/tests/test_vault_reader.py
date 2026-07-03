@@ -5,6 +5,8 @@ import pytest
 from dairy_web.vault_reader import (
     DayNotFound,
     extract_note_raw_text,
+    extract_note_raw_text_by_id,
+    identify_day_note_blocks,
     list_day_dates,
     raw_text_sha256,
     read_day,
@@ -54,6 +56,83 @@ def test_read_day_parses_blocks_in_file_order_and_keeps_duplicate_timestamps(tmp
         note_path="2026/06/2026-06-16.md",
         ts="09:00",
     ) == "First block."
+    assert extract_note_raw_text_by_id(
+        vault_dir=tmp_path,
+        note_path="2026/06/2026-06-16.md",
+        note_id="2026-06-16T09:00#2",
+    ) == "Second block."
+
+
+def test_extract_note_raw_text_by_id_matches_exact_duplicate_timestamp_block(tmp_path):
+    write_day(
+        tmp_path,
+        "2026-06-08",
+        "\n".join(
+            [
+                "# 2026-06-08",
+                "",
+                "## 10:00",
+                "",
+                "first",
+                "",
+                "## 10:00",
+                "",
+                "second",
+            ]
+        ),
+    )
+
+    assert extract_note_raw_text_by_id(
+        vault_dir=tmp_path,
+        note_path="2026/06/2026-06-08.md",
+        note_id="2026-06-08T10:00",
+    ) == "first"
+    assert extract_note_raw_text_by_id(
+        vault_dir=tmp_path,
+        note_path="2026/06/2026-06-08.md",
+        note_id="2026-06-08T10:00#2",
+    ) == "second"
+
+
+def test_identified_day_blocks_skip_empty_blocks_when_numbering_duplicates(tmp_path):
+    write_day(
+        tmp_path,
+        "2026-06-16",
+        "\n".join(
+            [
+                "# 2026-06-16",
+                "",
+                "## 10:00",
+                "",
+                "<!-- dairy:note-enrichment -->",
+                "mood:: calm · topics:: work",
+                "",
+                "## 10:00",
+                "",
+                "second block text",
+                "",
+                "## 10:00",
+                "",
+                "third block text",
+            ]
+        ),
+    )
+
+    blocks = read_day(vault_dir=tmp_path, day="2026-06-16")
+    identified = identify_day_note_blocks(blocks=blocks, target_date="2026-06-16")
+
+    assert [(item.id, item.block.raw_text) for item in identified] == [
+        ("2026-06-16T10:00", "second block text"),
+        ("2026-06-16T10:00#2", "third block text"),
+    ]
+    assert (
+        extract_note_raw_text_by_id(
+            vault_dir=tmp_path,
+            note_path="2026/06/2026-06-16.md",
+            note_id="2026-06-16T10:00#2",
+        )
+        == "third block text"
+    )
 
 
 def test_read_day_allows_existing_files_without_note_blocks(tmp_path):

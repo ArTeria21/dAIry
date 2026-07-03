@@ -6,9 +6,11 @@ dist/
 wheels/
 *.egg-info
 AGENTS.md
+plan
 task.md
 design.md
 .pytest_cache
+diary
 
 # Virtual environments
 .venv
@@ -16,9 +18,6 @@ design.md
 # Environment variables
 .env
 gcp_creds.json
-
-# Test journal
-journal/
 
 # Local enrichment cache
 *.sqlite3

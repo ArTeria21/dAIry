@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { chromeTextClass, readingTextClass } from "../design/theme";
 import { NoteEditError, saveNoteText } from "../services/notes";
@@ -8,8 +8,16 @@ type NoteEditorProps = {
   noteId: string;
   rawText: string;
   rawTextSha256: string;
-  onReload: () => Promise<void>;
+  onReload: () => Promise<ReloadedNoteText | null>;
 };
+
+type ReloadedNoteText = {
+  rawText: string;
+  rawTextSha256: string;
+};
+
+const savedStatus = "SAVED · ENRICHMENT WILL UPDATE LATER";
+const reloadedStatus = "NOTE CHANGED ELSEWHERE — RELOADED";
 
 export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEditorProps) {
   const [editing, setEditing] = useState(false);
@@ -18,12 +26,26 @@ export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEdi
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [disabled, setDisabled] = useState(false);
+  const [pendingReloadSync, setPendingReloadSync] = useState(false);
+  const [savedReloadBaselineSha, setSavedReloadBaselineSha] = useState("");
+  const pendingReloadTextRef = useRef<ReloadedNoteText | null>(null);
 
   useEffect(() => {
-    if (!editing || status === "NOTE CHANGED ELSEWHERE — RELOADED") {
-      setDraft(rawText);
+    if (pendingReloadSync) {
+      setDraft(pendingReloadTextRef.current?.rawText ?? rawText);
+      pendingReloadTextRef.current = null;
+      setPendingReloadSync(false);
+      return;
     }
-  }, [editing, rawText, status]);
+
+    if (!editing) {
+      setDraft(rawText);
+      if (status === savedStatus && savedReloadBaselineSha && rawTextSha256 !== savedReloadBaselineSha) {
+        setSavedReloadBaselineSha("");
+        setStatus("");
+      }
+    }
+  }, [editing, pendingReloadSync, rawText, rawTextSha256, savedReloadBaselineSha, status]);
 
   if (!editing) {
     return (
@@ -34,7 +56,7 @@ export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEdi
             chromeTextClass,
             "w-fit rounded-[2px] border border-hairline px-3 py-2 text-[10px] text-slate disabled:opacity-50",
           )}
-          disabled={disabled}
+          disabled={disabled || saving}
           onClick={() => {
             setEditing(true);
             setDraft(rawText);
@@ -56,14 +78,25 @@ export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEdi
       await saveNoteText(noteId, draft, rawTextSha256);
       setEditing(false);
       setUnsavedVersion("");
-      setStatus("SAVED · ENRICHMENT WILL UPDATE LATER");
-      await onReload();
+      setSavedReloadBaselineSha(rawTextSha256);
+      setStatus(savedStatus);
+      try {
+        await onReload();
+      } catch {
+        setSavedReloadBaselineSha("");
+        setStatus("RELOAD FAILED");
+      }
     } catch (error) {
       if (error instanceof NoteEditError && error.status === 409) {
         const attempted = draft;
-        await onReload();
-        setUnsavedVersion(attempted);
-        setStatus("NOTE CHANGED ELSEWHERE — RELOADED");
+        try {
+          pendingReloadTextRef.current = await onReload();
+          setPendingReloadSync(true);
+          setUnsavedVersion(attempted);
+          setStatus(reloadedStatus);
+        } catch {
+          setStatus("RELOAD FAILED");
+        }
       } else if (error instanceof NoteEditError && error.status === 502) {
         setEditing(false);
         setDisabled(true);
@@ -84,6 +117,7 @@ export function NoteEditor({ noteId, onReload, rawText, rawTextSha256 }: NoteEdi
           readingTextClass,
           "min-h-[180px] rounded-[2px] border border-hairline bg-cream-paper p-3 text-[15px] leading-7 outline-none",
         )}
+        disabled={saving}
         onChange={(event) => setDraft(event.target.value)}
         value={draft}
       />

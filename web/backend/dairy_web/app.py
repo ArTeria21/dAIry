@@ -26,7 +26,8 @@ from dairy_web.vault_reader import (
     ENRICHMENT_MARKER,
     ENTRY_HEADING_RE,
     NoteRawTextNotFound,
-    extract_note_raw_text,
+    extract_note_raw_text_by_id,
+    identify_day_note_blocks,
     list_day_dates,
     raw_text_sha256,
     read_day,
@@ -192,7 +193,12 @@ def create_app(
             days.append(
                 {
                     "date": day,
-                    "note_count": len(read_day(vault_dir=vault_root, day=day)),
+                    "note_count": len(
+                        identify_day_note_blocks(
+                            blocks=read_day(vault_dir=vault_root, day=day),
+                            target_date=day,
+                        )
+                    ),
                     "mood": None if record is None else record.mood,
                 }
             )
@@ -236,10 +242,10 @@ def create_app(
             raise HTTPException(status_code=404, detail="Note not found")
         day = store.get_day(note.date)
         try:
-            raw_text = extract_note_raw_text(
+            raw_text = extract_note_raw_text_by_id(
                 vault_dir=vault_root,
                 note_path=note.note_path,
-                ts=note.ts,
+                note_id=note.id,
             )
         except NoteRawTextNotFound as exc:
             raise HTTPException(status_code=404, detail="Note not found") from exc
@@ -410,13 +416,10 @@ def _day_notes(
     store: EnrichmentReadStore,
     target_date: str,
 ) -> list[dict[str, object]]:
-    seen: dict[str, int] = {}
     notes: list[dict[str, object]] = []
-    for block in blocks:
-        base_id = f"{target_date}T{block.ts}"
-        duplicate_count = seen.get(base_id, 0) + 1
-        seen[base_id] = duplicate_count
-        note_id = base_id if duplicate_count == 1 else f"{base_id}#{duplicate_count}"
+    for identified in identify_day_note_blocks(blocks=blocks, target_date=target_date):
+        block = identified.block
+        note_id = identified.id
         record = store.get_note(note_id)
         notes.append(
             {

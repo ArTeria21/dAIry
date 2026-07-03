@@ -8,6 +8,7 @@ from dairy_bot.services.enrichment import (
     ENRICHMENT_LINE_RE,
     ENRICHMENT_MARKER,
     ENTRY_HEADING_RE,
+    parse_daily_entries,
 )
 
 MAX_NOTE_TEXT_CHARS = 50_000
@@ -89,34 +90,16 @@ def replace_note_text(
 
 def _find_block(content: str, *, note_id: str, note_path: Path) -> _EditableBlock:
     lines = content.splitlines(keepends=True)
-    heading_indexes = [
-        index
-        for index, line in enumerate(lines)
-        if ENTRY_HEADING_RE.match(_line_text(line).strip())
-    ]
-    note_date = note_path.stem
-    seen_ids: dict[str, int] = {}
-
-    for position, start in enumerate(heading_indexes):
-        match = ENTRY_HEADING_RE.match(_line_text(lines[start]).strip())
-        if match is None:
-            continue
-        end = (
-            heading_indexes[position + 1]
-            if position + 1 < len(heading_indexes)
-            else len(lines)
-        )
-        base_id = f"{note_date}T{match.group('ts')}"
-        duplicate_count = seen_ids.get(base_id, 0) + 1
-        seen_ids[base_id] = duplicate_count
-        entry_id = base_id if duplicate_count == 1 else f"{base_id}#{duplicate_count}"
-        body_lines, managed_lines = _split_managed_lines(lines[start + 1 : end])
-        if entry_id == note_id:
+    for entry in parse_daily_entries(content, note_path):
+        if entry.entry_id == note_id:
+            body_lines, managed_lines = _split_managed_lines(
+                lines[entry.start_line + 1 : entry.end_line]
+            )
             return _EditableBlock(
-                entry_id=entry_id,
-                start=start,
-                end=end,
-                header=lines[start],
+                entry_id=entry.entry_id,
+                start=entry.start_line,
+                end=entry.end_line,
+                header=lines[entry.start_line],
                 body_lines=body_lines,
                 managed_lines=managed_lines,
             )

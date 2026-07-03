@@ -38,6 +38,10 @@ type PointStyle = CSSProperties & {
 
 type Highlight = { mode: ColorMode; key: string };
 
+type LoadNoteOptions = {
+  keepCurrent?: boolean;
+};
+
 type DragState = {
   pointerId: number;
   startClientX: number;
@@ -62,8 +66,9 @@ export function MapView() {
   const [colorMode, setColorMode] = useState<ColorMode>("cluster");
   const [highlight, setHighlight] = useState<Highlight | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<MapPoint | null>(null);
-  const [selectedPointId, setSelectedPointId] = useState<number | null>(null);
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [note, setNote] = useState<NoteDetails | null>(null);
+  const [noteReloading, setNoteReloading] = useState(false);
   const [noteUnavailable, setNoteUnavailable] = useState(false);
   const [viewTransform, setViewTransform] = useState<ViewTransform>(initialViewTransform);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -122,13 +127,40 @@ export function MapView() {
     await loadNote(point.id);
   }
 
-  async function loadNote(id: number) {
-    setNote(null);
+  async function reloadSelectedNote() {
+    if (selectedPointId !== null) {
+      const reloadedNote = await loadNote(selectedPointId, { keepCurrent: true });
+      return reloadedNote
+        ? {
+            rawText: reloadedNote.raw_text,
+            rawTextSha256: reloadedNote.raw_text_sha256,
+          }
+        : null;
+    }
+    return null;
+  }
+
+  async function loadNote(id: string, options: LoadNoteOptions = {}): Promise<NoteDetails | null> {
+    const keepCurrent = options.keepCurrent === true;
+    if (keepCurrent) {
+      setNoteReloading(true);
+    } else {
+      setNoteReloading(false);
+      setNote(null);
+    }
     setNoteUnavailable(false);
     try {
-      setNote(await fetchNoteDetails(id));
+      const nextNote = await fetchNoteDetails(id);
+      setNote(nextNote);
+      return nextNote;
     } catch {
       setNoteUnavailable(true);
+      if (keepCurrent) {
+        throw new Error("NOTE RELOAD FAILED");
+      }
+      return null;
+    } finally {
+      setNoteReloading(false);
     }
   }
 
@@ -255,7 +287,8 @@ export function MapView() {
         <NotePanel
           note={note}
           noteUnavailable={noteUnavailable}
-          onReload={() => (selectedPointId === null ? Promise.resolve() : loadNote(selectedPointId))}
+          noteReloading={noteReloading}
+          onReload={reloadSelectedNote}
           selectedPointId={selectedPointId}
         />
       </div>
@@ -458,13 +491,15 @@ function PointButton({
 function NotePanel({
   note,
   noteUnavailable,
+  noteReloading,
   onReload,
   selectedPointId,
 }: {
   note: NoteDetails | null;
   noteUnavailable: boolean;
-  onReload: () => Promise<void>;
-  selectedPointId: number | null;
+  noteReloading: boolean;
+  onReload: () => Promise<{ rawText: string; rawTextSha256: string } | null>;
+  selectedPointId: string | null;
 }) {
   if (selectedPointId === null) {
     return (
@@ -502,6 +537,7 @@ function NotePanel({
 
   return (
     <aside
+      aria-busy={noteReloading}
       aria-label={`NOTE ${note.id} DETAILS`}
       className={cx(notePanelFrameClass, "grid content-start gap-4 p-5")}
       role="complementary"
@@ -542,10 +578,6 @@ function NotePanel({
 }
 
 function pointColor(point: MapPoint, colorMode: ColorMode, highlight: Highlight | null): string {
-  if (point.cluster_id === -1) {
-    return noiseColor;
-  }
-
   if (colorMode === "mood") {
     const color = moodPalette[point.mood];
     const activeMood = activeHighlight(highlight, "mood");
@@ -557,8 +589,12 @@ function pointColor(point: MapPoint, colorMode: ColorMode, highlight: Highlight 
     return !activeTopic ? topicPointColor : point.topics.includes(activeTopic.key) ? topicPointHighlightColor : topicMutedColor;
   }
 
-  const color = clusterColor(point.cluster_id);
   const activeCluster = activeHighlight(highlight, "cluster");
+  if (point.cluster_id === -1) {
+    return !activeCluster || activeCluster.key === unclusteredLegendKey ? noiseColor : topicMutedColor;
+  }
+
+  const color = clusterColor(point.cluster_id);
   return !activeCluster || clusterHighlightMatches(point, activeCluster.key) ? color : topicMutedColor;
 }
 

@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { moodPalette, topicMutedColor } from "../design/palettes";
 import { chromeTextClass, readingTextClass } from "../design/theme";
@@ -24,37 +24,43 @@ export function JournalView({ date }: { date?: string }) {
   const [monthDays, setMonthDays] = useState<JournalMonthDay[]>([]);
   const [loading, setLoading] = useState(true);
   const [unavailable, setUnavailable] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
+  const loadGenerationRef = useRef(0);
 
-  useEffect(() => {
-    let active = true;
+  const loadDay = useCallback(() => {
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
     setLoading(true);
     setUnavailable(false);
     const request = date ? fetchJournalDay(date) : fetchLatestJournalDay();
 
-    request
+    return request
       .then((nextPayload) => {
-        if (!active) {
-          return;
+        if (loadGenerationRef.current === generation) {
+          setPayload(nextPayload);
+          setMonth(nextPayload.date.slice(0, 7));
         }
-        setPayload(nextPayload);
-        setMonth(nextPayload.date.slice(0, 7));
+        return nextPayload;
       })
-      .catch(() => {
-        if (active) {
+      .catch((error) => {
+        if (loadGenerationRef.current === generation) {
           setPayload(null);
           setUnavailable(true);
         }
+        throw error;
       })
       .finally(() => {
-        if (active) {
+        if (loadGenerationRef.current === generation) {
           setLoading(false);
         }
       });
+  }, [date]);
+
+  useEffect(() => {
+    void loadDay().catch(() => undefined);
     return () => {
-      active = false;
+      loadGenerationRef.current += 1;
     };
-  }, [date, reloadKey]);
+  }, [loadDay]);
 
   useEffect(() => {
     if (!month) {
@@ -126,10 +132,17 @@ export function JournalView({ date }: { date?: string }) {
               <p className={cx(readingTextClass, "whitespace-pre-wrap text-[15px] leading-7")}>{note.raw_text}</p>
               <NoteEditor
                 noteId={note.id}
-                onReload={() => {
-                  setReloadKey((current) => current + 1);
-                  return Promise.resolve();
-                }}
+                onReload={() =>
+                  loadDay().then((nextPayload) => {
+                    const reloadedNote = nextPayload.notes.find((item) => item.id === note.id);
+                    return reloadedNote
+                      ? {
+                          rawText: reloadedNote.raw_text,
+                          rawTextSha256: reloadedNote.raw_text_sha256,
+                        }
+                      : null;
+                  })
+                }
                 rawText={note.raw_text}
                 rawTextSha256={note.raw_text_sha256}
               />

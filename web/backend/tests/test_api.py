@@ -427,6 +427,20 @@ def test_AC_6_note_detail_is_the_only_payload_with_raw_text_and_missing_note_is_
     assert "2026/06" not in missing.text
 
 
+def test_note_detail_reads_duplicate_timestamp_note_by_exact_encoded_id(tmp_path):
+    client = build_day_reader_client(tmp_path)
+    login(client)
+
+    response = client.get("/api/notes/2026-06-16T09:00%232")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["id"] == "2026-06-16T09:00#2"
+    assert payload["raw_text"] == "Second duplicate raw."
+    assert payload["raw_text_sha256"] == raw_text_sha256("Second duplicate raw.")
+    assert payload["gist"] == "Second enriched note."
+
+
 def test_sprint_3_day_detail_reads_vault_and_joins_enrichment_by_bot_note_ids(tmp_path):
     client = build_day_reader_client(tmp_path)
     login(client)
@@ -496,6 +510,54 @@ def test_sprint_3_month_index_has_counts_but_no_raw_text_or_paths(tmp_path):
     assert "Vault-only raw text" not in serialized
     assert "note_path" not in serialized
     assert "2026/06" not in serialized
+
+
+def test_day_detail_and_month_index_skip_empty_duplicate_blocks(tmp_path):
+    write_day(
+        tmp_path,
+        "2026-06-20",
+        [
+            "# 2026-06-20",
+            "",
+            "## 10:00",
+            "",
+            "<!-- dairy:note-enrichment -->",
+            "mood:: calm · topics:: work",
+            "",
+            "## 10:00",
+            "",
+            "second block text",
+            "",
+            "## 10:00",
+            "",
+            "third block text",
+        ],
+    )
+    notes = [
+        replace(
+            make_note("2026-06-20T10:00"),
+            gist="Second enriched note.",
+            topics=["second"],
+        ),
+        replace(
+            make_note("2026-06-20T10:00#2"),
+            gist="Third enriched note.",
+            topics=["third"],
+        ),
+    ]
+    client = build_store_client(tmp_path, notes=notes, days=[])
+    login(client)
+
+    day_payload = client.get("/api/days/2026-06-20").json()
+    month_payload = client.get("/api/days?month=2026-06").json()
+
+    assert [(note["id"], note["raw_text"], note["gist"]) for note in day_payload["notes"]] == [
+        ("2026-06-20T10:00", "second block text", "Second enriched note."),
+        ("2026-06-20T10:00#2", "third block text", "Third enriched note."),
+    ]
+    assert month_payload == {
+        "days": [{"date": "2026-06-20", "note_count": 2, "mood": None}]
+    }
 
 
 def test_sprint_3_day_endpoints_are_auth_gated_and_latest_uses_last_existing_day(tmp_path):

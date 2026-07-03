@@ -222,6 +222,8 @@ describe("Sprint 5 seasons view", () => {
     expect(noMoodDay).toHaveAttribute("fill", noMoodColor);
     expect(fillOpacity(noMoodDay)).toBeCloseTo(0.675);
     expect(emptyDay).toHaveAttribute("fill", "transparent");
+    expect(emptyDay).toHaveAttribute("stroke", "#e5e5e5");
+    expect(emptyDay).toHaveAttribute("stroke-width", "1");
     expect(emptyDay).not.toHaveAttribute("role");
     expect(screen.getByTestId("calendar-year-2026")).toBeInTheDocument();
   });
@@ -317,5 +319,33 @@ describe("Sprint 5 seasons view", () => {
 
     expect(model.series.map((series) => series.key)).toEqual(["work"]);
     expect(model.data[0].shares.work).toBe(0);
+  });
+
+  it("fills missing ISO weeks so stream x positions stay calendar-linear", () => {
+    const model = buildTopicStreamModel([
+      { period: "2026-W01", total: 1, counts: { work: 1 } },
+      { period: "2026-W02", total: 1, counts: { work: 1 } },
+      { period: "2026-W03", total: 1, counts: { work: 1 } },
+      { period: "2026-W04", total: 1, counts: { work: 1 } },
+      { period: "2026-W20", total: 1, counts: { home: 1 } },
+      { period: "2026-W21", total: 1, counts: { home: 1 } },
+      { period: "2026-W22", total: 1, counts: { home: 1 } },
+      { period: "2026-W23", total: 1, counts: { home: 1 } },
+    ]);
+
+    expect(model.data).toHaveLength(23);
+    expect(model.data.map((datum) => datum.period).slice(0, 5)).toEqual([
+      "2026-W01",
+      "2026-W02",
+      "2026-W03",
+      "2026-W04",
+      "2026-W05",
+    ]);
+    expect(model.data[4]).toMatchObject({
+      period: "2026-W05",
+      counts: { work: 0, home: 0 },
+      shares: { work: 0, home: 0 },
+    });
+    expect(model.data.at(-1)?.period).toBe("2026-W23");
   });
 });

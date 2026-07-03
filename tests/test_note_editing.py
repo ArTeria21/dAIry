@@ -12,6 +12,39 @@ from dairy_bot.services.note_editing import (
 )
 
 
+def test_replace_note_text_skips_empty_duplicate_blocks_like_enrichment():
+    content = "\n".join(
+        [
+            "# 2026-06-16",
+            "",
+            "## 10:00",
+            "",
+            "<!-- dairy:note-enrichment -->",
+            "mood:: calm · topics:: work",
+            "",
+            "## 10:00",
+            "",
+            "second block text",
+            "",
+            "## 10:00",
+            "",
+            "third block text",
+        ]
+    )
+
+    result = replace_note_text(
+        content=content,
+        note_id="2026-06-16T10:00#2",
+        note_path="2026/06/2026-06-16.md",
+        expected_sha256=note_text_sha256("third block text"),
+        new_text="third block updated",
+    )
+
+    assert "## 10:00\n\nsecond block text" in result.content
+    assert "## 10:00\n\nthird block updated" in result.content
+    assert "third block text" not in result.content
+
+
 def test_replace_note_text_preserves_frontmatter_neighbors_header_and_enrichment():
     content = "\n".join(
         [

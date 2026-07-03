@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import sqlite3
 from collections import Counter, defaultdict
@@ -18,6 +19,7 @@ LOGGER = logging.getLogger(__name__)
 
 CLUSTER_REDUCTION_DIMENSIONS = 10
 CLUSTER_REDUCTION_NEIGHBORS = 15
+MIN_NOTES_FOR_PROJECTION = 5
 MIN_NOTES_FOR_CLUSTERING = 15
 OPENROUTER_LABEL_TIMEOUT_SECONDS = 20.0
 # Revisit these once the corpus grows beyond roughly 1000 notes.
@@ -275,9 +277,7 @@ class AnalysisService:
             return snapshot
 
         vectors = _embedding_matrix(notes)
-        coordinates = (
-            [(0.5, 0.5)] if len(notes) == 1 else self.projector.project(vectors)
-        )
+        coordinates = self._project_coordinates(notes, vectors)
         if len(notes) < MIN_NOTES_FOR_CLUSTERING:
             labels = [-1] * len(notes)
         else:
@@ -321,6 +321,22 @@ class AnalysisService:
         )
         self.cache.save_snapshot(snapshot)
         return snapshot
+
+    def _project_coordinates(
+        self,
+        notes: list[NoteRecord],
+        vectors: list[list[float]],
+    ) -> list[tuple[float, float]]:
+        if len(notes) < MIN_NOTES_FOR_PROJECTION:
+            return _deterministic_coordinates(len(notes))
+        try:
+            coordinates = self.projector.project(vectors)
+            if len(coordinates) != len(notes):
+                raise ValueError("Projection length must match note count")
+            return coordinates
+        except Exception:
+            LOGGER.warning("Projection failed; using deterministic fallback", exc_info=True)
+            return _deterministic_coordinates(len(notes))
 
 
 class UmapProjector:
@@ -451,6 +467,22 @@ def _embedding_matrix(notes: list[NoteRecord]) -> list[list[float]]:
     if len(dimensions) > 1:
         raise ValueError("All notes must have matching embedding dimensions")
     return [list(note.embedding) for note in notes]
+
+
+def _deterministic_coordinates(count: int) -> list[tuple[float, float]]:
+    if count <= 0:
+        return []
+    if count == 1:
+        return [(0.5, 0.5)]
+
+    radius = 0.24
+    return [
+        (
+            0.5 + radius * math.cos((2 * math.pi * index) / count),
+            0.5 + radius * math.sin((2 * math.pi * index) / count),
+        )
+        for index in range(count)
+    ]
 
 
 def _clusters_by_id(

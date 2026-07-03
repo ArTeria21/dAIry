@@ -160,8 +160,9 @@ function StreamSvg({
 }
 
 export function buildTopicStreamModel(buckets: TopicBucket[]): TopicStreamModel {
+  const completedBuckets = completeWeeklyBuckets(buckets);
   const totals = new Map<string, number>();
-  buckets.forEach((bucket) => {
+  completedBuckets.forEach((bucket) => {
     Object.entries(bucket.counts).forEach(([topic, count]) => {
       totals.set(topic, (totals.get(topic) ?? 0) + count);
     });
@@ -192,7 +193,7 @@ export function buildTopicStreamModel(buckets: TopicBucket[]): TopicStreamModel 
   }
 
   return {
-    data: buckets.map((bucket) => {
+    data: completedBuckets.map((bucket) => {
       const counts: Record<string, number> = {};
       const shares: Record<string, number> = {};
       topTopics.forEach((topic) => {
@@ -215,6 +216,39 @@ export function buildTopicStreamModel(buckets: TopicBucket[]): TopicStreamModel 
     }),
     series,
   };
+}
+
+function completeWeeklyBuckets(buckets: TopicBucket[]): TopicBucket[] {
+  if (buckets.length === 0) {
+    return [];
+  }
+
+  const parsed = buckets
+    .map((bucket) => {
+      const weekStart = weekStartFromPeriod(bucket.period);
+      return isIsoDate(weekStart) ? { bucket, weekStart } : null;
+    })
+    .filter((item): item is { bucket: TopicBucket; weekStart: string } => item !== null)
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+
+  if (parsed.length !== buckets.length) {
+    return buckets;
+  }
+
+  const byWeekStart = new Map(parsed.map((item) => [item.weekStart, item.bucket]));
+  const completed: TopicBucket[] = [];
+  const end = dateFromIso(parsed[parsed.length - 1].weekStart);
+  for (const cursor = dateFromIso(parsed[0].weekStart); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 7)) {
+    const weekStart = isoDate(cursor);
+    completed.push(
+      byWeekStart.get(weekStart) ?? {
+        period: periodFromWeekStart(cursor),
+        counts: {},
+        total: 0,
+      },
+    );
+  }
+  return completed;
 }
 
 function stackExtent(stacked: ReturnType<ReturnType<typeof stack<StreamDatum>>>): [number, number] {
@@ -243,11 +277,12 @@ function yScale(value: number, [min, max]: [number, number]): number {
 function monthTicks(data: StreamDatum[]): { label: string; x: number }[] {
   let previous = "";
   return data.flatMap((datum, index) => {
-    const month = datum.weekStart.slice(5, 7);
-    if (month === previous) {
+    const monthKey = datum.weekStart.slice(0, 7);
+    if (monthKey === previous) {
       return [];
     }
-    previous = month;
+    previous = monthKey;
+    const month = datum.weekStart.slice(5, 7);
     return [{ label: monthLabel(month), x: xForIndex(index, data.length) }];
   });
 }
@@ -277,6 +312,30 @@ function weekStartFromPeriod(period: string): string {
   firstMonday.setUTCDate(januaryFourth.getUTCDate() - mondayOffset);
   firstMonday.setUTCDate(firstMonday.getUTCDate() + (week - 1) * 7);
   return firstMonday.toISOString().slice(0, 10);
+}
+
+function periodFromWeekStart(weekStart: Date): string {
+  const thursday = new Date(weekStart);
+  thursday.setUTCDate(weekStart.getUTCDate() + 3);
+  const year = thursday.getUTCFullYear();
+  const januaryFourth = new Date(Date.UTC(year, 0, 4));
+  const mondayOffset = (januaryFourth.getUTCDay() + 6) % 7;
+  const firstMonday = new Date(januaryFourth);
+  firstMonday.setUTCDate(januaryFourth.getUTCDate() - mondayOffset);
+  const week = Math.floor((weekStart.getTime() - firstMonday.getTime()) / (7 * 24 * 60 * 60 * 1000)) + 1;
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+function dateFromIso(value: string): Date {
+  return new Date(`${value}T00:00:00.000Z`);
+}
+
+function isoDate(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function isIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function monthLabel(month: string): string {

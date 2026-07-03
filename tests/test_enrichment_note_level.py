@@ -96,6 +96,39 @@ mood:: anger · topics:: learning
     assert entries[1].entry_id == "2026-02-13T19:05"
 
 
+def test_parse_daily_entries_skips_empty_blocks_when_numbering_duplicates(tmp_path):
+    path = note_path(tmp_path, "2026-06-16")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "\n".join(
+            [
+                "# 2026-06-16",
+                "",
+                "## 10:00",
+                "",
+                "<!-- dairy:note-enrichment -->",
+                "mood:: calm · topics:: work",
+                "",
+                "## 10:00",
+                "",
+                "second block text",
+                "",
+                "## 10:00",
+                "",
+                "third block text",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    entries = parse_daily_entries(read_text(path), path)
+
+    assert [(entry.entry_id, entry.text) for entry in entries] == [
+        ("2026-06-16T10:00", "second block text"),
+        ("2026-06-16T10:00#2", "third block text"),
+    ]
+
+
 def test_AC_2_note_enrichment_attaches_exactly_one_inline_line_and_is_idempotent(tmp_path):
     path = run(
         storage.append_entry(

@@ -78,6 +78,15 @@ class FakeProjector:
         return [(float(index), float(index + 10)) for index, _ in enumerate(vectors)]
 
 
+class FailingProjector:
+    def __init__(self):
+        self.calls = 0
+
+    def project(self, vectors):
+        self.calls += 1
+        raise ValueError("projection failed")
+
+
 class FakeReducer:
     def __init__(self, dimensions: int = 10):
         self.dimensions = dimensions
@@ -329,6 +338,52 @@ def test_EC_1_empty_notes_return_empty_snapshot_without_heavy_compute(tmp_path):
     assert reducer.calls == 0
     assert clusterer.calls == 0
     assert labeler.calls == 0
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 4])
+def test_small_note_sets_use_deterministic_projection_without_umap(tmp_path, count):
+    projector = FakeProjector()
+    reducer = FakeReducer()
+    clusterer = FakeClusterer([])
+    service = AnalysisService(
+        store=FakeStore(notes(count)),
+        cache=AnalysisCache(tmp_path / "analysis_cache.sqlite3"),
+        projector=projector,
+        reducer=reducer,
+        clusterer=clusterer,
+        labeler=FakeLabeler(),
+        now=fixed_now,
+    )
+
+    snapshot = service.get_map()
+
+    assert len(snapshot.points) == count
+    assert all(0 <= point.x <= 1 and 0 <= point.y <= 1 for point in snapshot.points)
+    assert {point.cluster_id for point in snapshot.points} == {-1}
+    assert snapshot.n_noise == count
+    assert projector.calls == 0
+    assert reducer.calls == 0
+    assert clusterer.calls == 0
+
+
+def test_projection_failure_falls_back_to_deterministic_coordinates(tmp_path):
+    projector = FailingProjector()
+    service = AnalysisService(
+        store=FakeStore(notes(5)),
+        cache=AnalysisCache(tmp_path / "analysis_cache.sqlite3"),
+        projector=projector,
+        reducer=FakeReducer(),
+        clusterer=FakeClusterer([]),
+        labeler=FakeLabeler(),
+        now=fixed_now,
+    )
+
+    snapshot = service.get_map()
+
+    assert len(snapshot.points) == 5
+    assert all(0 <= point.x <= 1 and 0 <= point.y <= 1 for point in snapshot.points)
+    assert snapshot.n_noise == 5
+    assert projector.calls == 1
 
 
 def test_E10_old_cache_schema_without_n_noise_is_recreated(tmp_path):
