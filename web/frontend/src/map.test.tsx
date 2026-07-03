@@ -286,7 +286,7 @@ describe("Phase 3 map view", () => {
       "true",
     );
     expect(screen.getByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
-    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("h-[84px]");
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("h-full");
     expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "HOME" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: "UNCLUSTERED" })).not.toBeInTheDocument();
@@ -563,11 +563,11 @@ describe("Phase 3 map view", () => {
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       topicMutedColor,
     );
-    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("h-[84px]");
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("h-full");
 
     await userEvent.click(screen.getByRole("button", { name: "MOOD" }));
 
-    expect(screen.getByLabelText("MOOD LEGEND")).toHaveClass("h-[84px]");
+    expect(screen.getByLabelText("MOOD LEGEND")).toHaveClass("h-full");
     expect(screen.getByRole("button", { name: "CALM" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       moodPalette.joy,

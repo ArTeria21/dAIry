@@ -17,17 +17,27 @@ type LegendProps = {
   activeKey: string | null;
   ariaLabel: string;
   onToggle: (key: string) => void;
+  vertical?: boolean;
 };
 
 type SwatchStyle = CSSProperties & {
   "--legend-color": string;
 };
 
-export function Legend({ activeKey, ariaLabel, items, onToggle }: LegendProps) {
+export function Legend({ activeKey, ariaLabel, items, onToggle, vertical = false }: LegendProps) {
   return (
-    <div aria-label={ariaLabel} className="grid h-[84px] content-start gap-2" role="group">
+    <div
+      aria-label={ariaLabel}
+      className={cx("grid content-start gap-2", vertical ? "h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" : "h-[84px]")}
+      role="group"
+    >
       <span className={cx(chromeTextClass, "text-[10px] text-slate")}>LEGEND</span>
-      <div className="flex max-h-[68px] flex-wrap gap-2 overflow-y-auto pr-1">
+      <div
+        className={cx(
+          "gap-2 overflow-y-auto pr-1",
+          vertical ? "flex min-h-0 flex-col content-start" : "flex max-h-[68px] flex-wrap",
+        )}
+      >
         {items.map((item) => {
           const active = activeKey === item.key;
 
@@ -37,7 +47,7 @@ export function Legend({ activeKey, ariaLabel, items, onToggle }: LegendProps) {
               aria-pressed={active}
               className={cx(
                 chromeTextClass,
-                "inline-flex h-8 max-w-full items-center gap-2 rounded-[2px] border bg-cream-paper px-2 text-[10px] disabled:opacity-55",
+                "inline-flex h-8 max-w-full shrink-0 items-center gap-2 rounded-[2px] border bg-cream-paper px-2 text-[10px] disabled:opacity-55",
                 active ? "border-signal-orange text-ink-black" : "border-hairline text-slate",
               )}
               disabled={item.disabled}
@@ -50,9 +60,9 @@ export function Legend({ activeKey, ariaLabel, items, onToggle }: LegendProps) {
               type="button"
             >
               {item.swatch ? <LegendSwatch color={item.swatch} testId={item.swatchTestId} /> : null}
-              <span>{item.label}</span>
+              <span className="min-w-0 truncate text-left">{item.label}</span>
               {item.count === undefined ? null : (
-                <span aria-hidden="true" className="text-slate">
+                <span aria-hidden="true" className="ml-auto text-slate">
                   {item.count}
                 </span>
               )}

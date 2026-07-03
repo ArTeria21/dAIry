@@ -15,6 +15,7 @@ export type MapCluster = {
   label: string;
   size: number;
   dominant_topics: string[];
+  description?: string;
 };
 
 export type MapPayload = {

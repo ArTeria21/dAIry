@@ -364,6 +364,7 @@ def test_AC_6_map_payload_contains_gist_but_never_raw_text_and_rebuild_is_protec
             "label": "Language Practice",
             "size": 1,
             "dominant_topics": ["learning"],
+            "description": "",
         }
     ]
     assert rebuild == {

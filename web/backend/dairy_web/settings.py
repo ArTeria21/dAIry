@@ -18,6 +18,7 @@ class WebSettings:
     openrouter_api_key: str
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     enrichment_model_name: str = "openai/gpt-4.1-mini"
+    language: str = "EN"
     cookie_secure: bool = True
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 60
@@ -44,6 +45,7 @@ class WebSettings:
             enrichment_model_name=os.getenv(
                 "ENRICHMENT_MODEL_NAME", "openai/gpt-4.1-mini"
             ),
+            language=os.getenv("LANGUAGE", "EN").upper(),
             cookie_secure=_env_bool("WEB_COOKIE_SECURE", default=True),
             login_rate_limit_attempts=int(
                 os.getenv("WEB_LOGIN_RATE_LIMIT_ATTEMPTS", "5")

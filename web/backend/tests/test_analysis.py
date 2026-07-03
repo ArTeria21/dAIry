@@ -211,11 +211,11 @@ def test_S1_2_clusterer_receives_reduced_vectors_not_raw_embeddings(tmp_path):
 
     assert cached.n_noise == 0
     assert set(reducer.input_dimensions) == {1024}
-    assert set(projector.input_dimensions) == {10}
+    assert set(projector.input_dimensions) == {1024}
     assert set(clusterer.input_dimensions) == {10}
 
 
-def test_sprint_7_projector_uses_reduced_vectors_only_at_cluster_boundary(tmp_path):
+def test_sprint_7_projector_always_uses_raw_embeddings(tmp_path):
     clustered_projector = FakeProjector()
     clustered_reducer = FakeReducer(dimensions=7)
     clustered = AnalysisService(
@@ -242,7 +242,7 @@ def test_sprint_7_projector_uses_reduced_vectors_only_at_cluster_boundary(tmp_pa
     unclustered.get_map()
 
     assert set(clustered_reducer.input_dimensions) == {1024}
-    assert set(clustered_projector.input_dimensions) == {7}
+    assert set(clustered_projector.input_dimensions) == {1024}
     assert set(unclustered_projector.input_dimensions) == {1024}
 
 
@@ -568,7 +568,7 @@ def test_AC_4_openrouter_cluster_labeler_uses_member_gists_for_short_labels():
     assert calls == [
         (
             "openrouter/test-model",
-            "Name this journal cluster in 2-4 words.\n"
+            "Name this journal cluster in 2-4 words in English.\n"
             "Gists:\n"
             "- Gist for 2026-06-16T21:55\n"
             "- Gist for 2026-06-17T10:15",

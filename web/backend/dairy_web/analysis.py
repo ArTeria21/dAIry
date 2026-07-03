@@ -26,6 +26,7 @@ OPENROUTER_LABEL_TIMEOUT_SECONDS = 20.0
 HDBSCAN_MIN_CLUSTER_SIZE = 6
 HDBSCAN_MIN_SAMPLES = 3
 HDBSCAN_CLUSTER_SELECTION_METHOD = "eom"
+LANGUAGE_DISPLAY_NAMES = {"EN": "English", "RU": "Russian"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,7 @@ class ClusterSummary:
     label: str
     size: int
     dominant_topics: list[str]
+    description: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,9 +157,9 @@ class AnalysisCache:
             conn.executemany(
                 """
                 INSERT INTO clusters (
-                    cluster_id, label, size, dominant_topics_json
+                    cluster_id, label, size, dominant_topics_json, description
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -165,6 +167,7 @@ class AnalysisCache:
                         cluster.label,
                         cluster.size,
                         json.dumps(cluster.dominant_topics, ensure_ascii=False),
+                        cluster.description,
                     )
                     for cluster in snapshot.clusters
                 ],
@@ -210,16 +213,22 @@ class AnalysisCache:
                     cluster_id INTEGER PRIMARY KEY,
                     label TEXT NOT NULL,
                     size INTEGER NOT NULL,
-                    dominant_topics_json TEXT NOT NULL
+                    dominant_topics_json TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT ''
                 );
                 """
             )
 
     def _metadata_schema_is_stale(self, conn: sqlite3.Connection) -> bool:
-        columns = {
+        metadata_columns = {
             str(row["name"]) for row in conn.execute("PRAGMA table_info(metadata)")
         }
-        return bool(columns) and "n_noise" not in columns
+        if metadata_columns and "n_noise" not in metadata_columns:
+            return True
+        cluster_columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(clusters)")
+        }
+        return bool(cluster_columns) and "description" not in cluster_columns
 
 
 class AnalysisService:
@@ -283,13 +292,18 @@ class AnalysisService:
         else:
             reduced_vectors = self.reducer.reduce(vectors)
             labels = self.clusterer.cluster(reduced_vectors)
-            coordinates = self._project_coordinates(notes, reduced_vectors)
+            # Project from raw embeddings: the reduced vectors use min_dist=0.0,
+            # which collapses points into clumps and is only suitable for HDBSCAN.
+            coordinates = self._project_coordinates(notes, vectors)
         if len(coordinates) != len(notes) or len(labels) != len(notes):
             raise ValueError("Projection and cluster lengths must match note count")
 
         n_noise = sum(1 for label in labels if int(label) == -1)
         clusters_by_id = _clusters_by_id(notes, labels)
         cluster_labels = _label_clusters_with_fallback(self.labeler, clusters_by_id)
+        cluster_descriptions = _describe_clusters_with_fallback(
+            self.labeler, clusters_by_id
+        )
         points = [
             MapPoint(
                 id=note.id,
@@ -310,6 +324,7 @@ class AnalysisService:
                 label=cluster_labels.get(cluster_id, f"Cluster {cluster_id}"),
                 size=len(cluster_notes),
                 dominant_topics=_dominant_topics(cluster_notes),
+                description=cluster_descriptions.get(cluster_id, ""),
             )
             for cluster_id, cluster_notes in sorted(clusters_by_id.items())
         ]
@@ -384,6 +399,14 @@ class StaticClusterLabeler:
             for cluster_id, notes in clusters.items()
         }
 
+    def describe_clusters(
+        self, clusters: dict[int, list[NoteRecord]]
+    ) -> dict[int, str]:
+        return {
+            cluster_id: _static_cluster_description(notes)
+            for cluster_id, notes in clusters.items()
+        }
+
 
 class OpenRouterClusterLabeler:
     def __init__(
@@ -395,6 +418,7 @@ class OpenRouterClusterLabeler:
         complete: Callable[[str, str], str] | None = None,
         max_gists: int = 8,
         timeout: float = OPENROUTER_LABEL_TIMEOUT_SECONDS,
+        language: str = "EN",
     ) -> None:
         self.model_name = model_name
         self.api_key = api_key
@@ -402,6 +426,9 @@ class OpenRouterClusterLabeler:
         self.complete = complete or self._complete_with_openrouter
         self.max_gists = max_gists
         self.timeout = timeout
+        self.language_name = LANGUAGE_DISPLAY_NAMES.get(
+            language.upper(), LANGUAGE_DISPLAY_NAMES["EN"]
+        )
 
     def label_clusters(self, clusters: dict[int, list[NoteRecord]]) -> dict[int, str]:
         fallback_labels = StaticClusterLabeler().label_clusters(clusters)
@@ -423,10 +450,44 @@ class OpenRouterClusterLabeler:
                 )
         return labels
 
+    def describe_clusters(
+        self, clusters: dict[int, list[NoteRecord]]
+    ) -> dict[int, str]:
+        descriptions: dict[int, str] = {}
+        for cluster_id, cluster_notes in clusters.items():
+            try:
+                raw = self.complete(
+                    self.model_name, self._description_prompt(cluster_notes)
+                )
+                descriptions[cluster_id] = " ".join(raw.split()).strip(" \"'`") or (
+                    _static_cluster_description(cluster_notes)
+                )
+            except Exception:
+                LOGGER.warning(
+                    "OpenRouter cluster description failed for cluster %s; "
+                    "using static description",
+                    cluster_id,
+                    exc_info=True,
+                )
+                descriptions[cluster_id] = _static_cluster_description(cluster_notes)
+        return descriptions
+
     def _prompt(self, notes: list[NoteRecord]) -> str:
         sample = notes[: self.max_gists]
         gists = "\n".join(f"- {note.gist}" for note in sample)
-        return f"Name this journal cluster in 2-4 words.\nGists:\n{gists}"
+        return (
+            f"Name this journal cluster in 2-4 words in {self.language_name}."
+            f"\nGists:\n{gists}"
+        )
+
+    def _description_prompt(self, notes: list[NoteRecord]) -> str:
+        sample = notes[: self.max_gists]
+        gists = "\n".join(f"- {note.gist}" for note in sample)
+        return (
+            "Summarize what unites this personal journal cluster in 1-2 plain "
+            f"{self.language_name} sentences. Return only the summary."
+            f"\nGists:\n{gists}"
+        )
 
     def _complete_with_openrouter(self, model: str, prompt: str) -> str:
         from openai import OpenAI
@@ -440,8 +501,9 @@ class OpenRouterClusterLabeler:
                 {
                     "role": "system",
                     "content": (
-                        "Return only a concise 2-4 word English label for this "
-                        "personal journal cluster."
+                        "You describe clusters of personal journal notes. Follow "
+                        "the user's instruction exactly and return only the "
+                        f"requested text in {self.language_name}."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -502,6 +564,13 @@ def _dominant_topics(notes: list[NoteRecord]) -> list[str]:
     return [topic for topic, _ in counts.most_common(3)]
 
 
+def _static_cluster_description(notes: list[NoteRecord]) -> str:
+    topics = [topic.replace("_", " ") for topic in _dominant_topics(notes)]
+    if not topics:
+        return f"{len(notes)} notes."
+    return f"{len(notes)} notes about {', '.join(topics)}."
+
+
 def _label_clusters_with_fallback(
     labeler: ClusterLabeler, clusters: dict[int, list[NoteRecord]]
 ) -> dict[int, str]:
@@ -517,6 +586,27 @@ def _label_clusters_with_fallback(
         cluster_id: labels.get(cluster_id) or fallback_labels.get(
             cluster_id, f"Cluster {cluster_id}"
         )
+        for cluster_id in clusters
+    }
+
+
+def _describe_clusters_with_fallback(
+    labeler: ClusterLabeler, clusters: dict[int, list[NoteRecord]]
+) -> dict[int, str]:
+    if not clusters:
+        return {}
+    fallback = StaticClusterLabeler().describe_clusters(clusters)
+    describe = getattr(labeler, "describe_clusters", None)
+    descriptions: dict[int, str] = {}
+    if callable(describe):
+        try:
+            descriptions = describe(clusters)
+        except Exception:
+            LOGGER.warning(
+                "Cluster describer failed; using static descriptions", exc_info=True
+            )
+    return {
+        cluster_id: descriptions.get(cluster_id) or fallback.get(cluster_id, "")
         for cluster_id in clusters
     }
 
@@ -543,6 +633,7 @@ def _cluster_from_row(row: sqlite3.Row) -> ClusterSummary:
         dominant_topics=[
             str(topic) for topic in json.loads(row["dominant_topics_json"])
         ],
+        description=str(row["description"]),
     )
 
 

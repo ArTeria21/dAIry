@@ -112,6 +112,7 @@ def create_app(
             model_name=settings.enrichment_model_name,  # type: ignore[union-attr]
             api_key=settings.openrouter_api_key,  # type: ignore[union-attr]
             base_url=settings.openrouter_base_url,  # type: ignore[union-attr]
+            language=settings.language,  # type: ignore[union-attr]
         ),
     )
     auth = auth or AuthService(

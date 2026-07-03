@@ -29,7 +29,8 @@ import { cx } from "../ui/classNames";
 
 const schematicBlue = "#0d6ea5";
 const mapSurfaceHeightClass = "h-[min(62vh,560px)] min-h-[440px]";
-const notePanelFrameClass = "max-h-[min(62vh,560px)] overflow-y-auto rounded-[2px] border border-hairline bg-cream-paper";
+const notePanelFrameClass =
+  "max-h-[min(62vh,560px)] overflow-y-auto overflow-x-hidden rounded-[2px] border border-hairline bg-cream-paper";
 
 type ColorMode = "cluster" | "mood" | "topic";
 
@@ -221,6 +222,10 @@ export function MapView() {
     return <p className={chromeTextClass}>LOADING MAP</p>;
   }
   const visiblePoints = payload.points.filter((point) => !hiddenPointIds.has(point.id));
+  const highlightedCluster =
+    colorMode === "cluster" && highlight?.mode === "cluster" && highlight.key !== unclusteredLegendKey
+      ? (payload.clusters.find((cluster) => String(cluster.id) === highlight.key) ?? null)
+      : null;
 
   return (
     <div className="grid gap-5">
@@ -233,16 +238,18 @@ export function MapView() {
         onResetView={() => setViewTransform(initialViewTransform)}
       />
 
-      <MapLegend
-        clusters={payload.clusters}
-        colorMode={colorMode}
-        highlight={highlight}
-        nNoise={payload.n_noise}
-        onHighlightToggle={toggleHighlight}
-        points={visiblePoints}
-      />
+      <div className="grid items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)_360px]">
+        <div className="min-h-0 lg:h-[min(62vh,560px)] lg:min-h-[440px]">
+          <MapLegend
+            clusters={payload.clusters}
+            colorMode={colorMode}
+            highlight={highlight}
+            nNoise={payload.n_noise}
+            onHighlightToggle={toggleHighlight}
+            points={visiblePoints}
+          />
+        </div>
 
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <section
           aria-label="JOURNAL EMBEDDING MAP"
           className={cx(
@@ -271,14 +278,6 @@ export function MapView() {
                   transformOrigin: "0px 0px",
                 }}
               >
-                {colorMode === "cluster" ? (
-                  <ClusterLayer
-                    clusters={payload.clusters}
-                    highlight={highlight}
-                    points={visiblePoints}
-                    viewTransform={viewTransform}
-                  />
-                ) : null}
                 {visiblePoints.map((point) => (
                   <PointButton
                     colorMode={colorMode}
@@ -287,24 +286,57 @@ export function MapView() {
                     onHover={setHoveredPoint}
                     onSelect={selectPoint}
                     point={point}
+                    scale={viewTransform.scale}
                     selected={selectedPointId === point.id}
                   />
                 ))}
+                {colorMode === "cluster" ? (
+                  <ClusterLayer
+                    clusters={payload.clusters}
+                    highlight={highlight}
+                    points={visiblePoints}
+                    viewTransform={viewTransform}
+                  />
+                ) : null}
               </div>
             </>
           )}
 
-          {hoveredPoint ? (
-            <div
-              className={cx(
-                readingTextClass,
-                "absolute left-4 top-4 max-w-[260px] rounded-[2px] border border-hairline bg-cream-paper px-3 py-2 text-sm shadow-subtle",
-              )}
-              role="tooltip"
-            >
-              {hoveredPoint.gist}
-            </div>
-          ) : null}
+          <div className="pointer-events-none absolute left-4 top-4 grid max-w-[280px] gap-2">
+            {hoveredPoint ? (
+              <div
+                className={cx(
+                  readingTextClass,
+                  "rounded-[2px] border border-hairline bg-cream-paper px-3 py-2 text-sm shadow-subtle",
+                )}
+                role="tooltip"
+              >
+                {hoveredPoint.gist}
+              </div>
+            ) : null}
+            {highlightedCluster ? (
+              <div
+                className="grid gap-2 rounded-[2px] border border-hairline bg-cream-paper px-3 py-2 shadow-subtle"
+                data-testid="cluster-summary"
+              >
+                <span className={cx(chromeTextClass, "text-[10px] text-ink-black")}>
+                  {highlightedCluster.label.toUpperCase()} · {highlightedCluster.size} NOTES
+                </span>
+                {highlightedCluster.description ? (
+                  <p className={cx(readingTextClass, "text-sm leading-6 text-slate")}>
+                    {highlightedCluster.description}
+                  </p>
+                ) : null}
+                {highlightedCluster.dominant_topics.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {highlightedCluster.dominant_topics.map((topic) => (
+                      <Tag key={topic}>{topic.replace(/_/g, " ").toUpperCase()}</Tag>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </section>
 
         <NotePanel
@@ -409,6 +441,7 @@ function MapLegend({
       ariaLabel={`${colorMode.toUpperCase()} LEGEND`}
       items={items}
       onToggle={(key) => onHighlightToggle(colorMode, key)}
+      vertical
     />
   );
 }
@@ -445,6 +478,9 @@ function ClusterLayer({
 }) {
   const activeClusterKey = highlight?.mode === "cluster" ? highlight.key : null;
   const labels = clusterLabels(clusters, points, activeClusterKey, viewTransform);
+  // The svg lives inside the zoomed viewport, so divide by scale to keep
+  // labels at a constant on-screen size.
+  const scale = Math.max(viewTransform.scale, 0.1);
 
   return (
     <svg aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full">
@@ -455,12 +491,13 @@ function ClusterLayer({
             <text
               className={cx(chromeTextClass, "font-plexmono")}
               data-testid={`cluster-label-${label.cluster.id}`}
+              dy={-14 / scale}
               fill={dimmed ? "#858483" : schematicBlue}
-              fontSize="11"
+              fontSize={11 / scale}
               paintOrder="stroke"
               stroke="#f5f4f1"
               strokeLinejoin="round"
-              strokeWidth="3"
+              strokeWidth={3 / scale}
               style={{ textShadow: "0 0 3px #f5f4f1" }}
               textAnchor="middle"
               x={formatPercent(label.x)}
@@ -524,7 +561,8 @@ function clusterLabelCandidate(
     return null;
   }
   const x = median(clusterPoints.map((point) => point.x)) * 100;
-  const y = (1 - median(clusterPoints.map((point) => point.y))) * 100;
+  // Anchor the label above the topmost point so it does not sit on the dots.
+  const y = Math.min(...clusterPoints.map((point) => (1 - point.y) * 100));
   const scale = Math.max(viewTransform.scale, 0.1);
   const width = (cluster.label.length * labelEstimateWidthPx) / scale;
   const height = labelEstimateHeightPx / scale;
@@ -552,6 +590,7 @@ function PointButton({
   onHover,
   onSelect,
   point,
+  scale,
   selected,
 }: {
   colorMode: ColorMode;
@@ -559,6 +598,7 @@ function PointButton({
   onHover: (point: MapPoint | null) => void;
   onSelect: (point: MapPoint) => void;
   point: MapPoint;
+  scale: number;
   selected: boolean;
 }) {
   const color = pointColor(point, colorMode, highlight);
@@ -567,13 +607,15 @@ function PointButton({
     backgroundColor: "var(--point-color)",
     left: `${point.x * 100}%`,
     top: `${(1 - point.y) * 100}%`,
+    // Counter the viewport zoom so points keep a constant on-screen size.
+    transform: `translate(-50%, -50%) scale(${1 / Math.max(scale, 0.1)})`,
   };
 
   return (
     <button
       aria-label={`NOTE ${point.id}`}
       className={cx(
-        "absolute -translate-x-1/2 -translate-y-1/2 rounded-[2px] border bg-[var(--point-color)] outline transition-[height,width,outline-color,box-shadow]",
+        "absolute rounded-[2px] border bg-[var(--point-color)] outline transition-[height,width,outline-color,box-shadow]",
         selected
           ? "h-4 w-4 border-pure-white outline-2 outline-ink-black shadow-sm"
           : "h-3 w-3 border-cream-paper outline-1 outline-hairline",
@@ -652,7 +694,7 @@ function NotePanel({
           {note.date} · OPEN DAY
         </a>
       </div>
-      <p className={cx(readingTextClass, "whitespace-pre-wrap text-[15px] leading-7")}>{note.raw_text}</p>
+      <p className={cx(readingTextClass, "whitespace-pre-wrap break-words text-[15px] leading-7")}>{note.raw_text}</p>
       <NoteEditor
         noteId={String(note.id)}
         onDeleted={onDeleted}
