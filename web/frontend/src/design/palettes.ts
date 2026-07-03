@@ -29,10 +29,10 @@ export const clusterPalette = [
 ];
 
 export const noiseColor = "#cbcbcb";
-export const topicPointColor = "#434343";
+export const topicPointColor = "#858483";
 export const topicPointHighlightColor = "#181818";
-export const topicHighlightColor = "#fb631b";
 export const topicMutedColor = "#858483";
+export const topicDimmedColor = "#dedede";
 
 export function moodColor(mood: Mood): string {
   return moodPalette[mood];

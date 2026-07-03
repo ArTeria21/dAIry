@@ -170,6 +170,36 @@ class EnrichmentStore:
             rows = conn.execute("SELECT * FROM notes ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
+    def delete_notes_missing_from_path(self, note_path: str, live_ids: set[str]) -> int:
+        with self._connect() as conn:
+            if live_ids:
+                placeholders = ", ".join("?" for _ in live_ids)
+                rows = conn.execute(
+                    f"""
+                    SELECT id FROM notes
+                    WHERE note_path = ? AND id NOT IN ({placeholders})
+                    """,
+                    [note_path, *sorted(live_ids)],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id FROM notes WHERE note_path = ?",
+                    (note_path,),
+                ).fetchall()
+            stale_ids = [str(row["id"]) for row in rows]
+            if not stale_ids:
+                return 0
+            stale_placeholders = ", ".join("?" for _ in stale_ids)
+            conn.execute(
+                f"DELETE FROM note_entry_state WHERE id IN ({stale_placeholders})",
+                stale_ids,
+            )
+            conn.execute(
+                f"DELETE FROM notes WHERE id IN ({stale_placeholders})",
+                stale_ids,
+            )
+        return len(stale_ids)
+
     def upsert_day(
         self,
         *,

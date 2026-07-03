@@ -6,7 +6,7 @@ import {
   moodColor,
   moodPalette,
   noiseColor,
-  topicHighlightColor,
+  topicDimmedColor,
   topicMutedColor,
   topicPointColor,
   topicPointHighlightColor,
@@ -36,9 +36,9 @@ describe("Phase 2 shared visualization palettes", () => {
     expect(clusterColor(0)).toBe(clusterPalette[0]);
     expect(clusterColor(8)).toBe(clusterPalette[0]);
     expect(noiseColor).toBe("#cbcbcb");
-    expect(topicPointColor).toBe("#434343");
+    expect(topicPointColor).toBe("#858483");
     expect(topicPointHighlightColor).toBe("#181818");
-    expect(topicHighlightColor).toBe("#fb631b");
     expect(topicMutedColor).toBe("#858483");
+    expect(topicDimmedColor).toBe("#dedede");
   });
 });

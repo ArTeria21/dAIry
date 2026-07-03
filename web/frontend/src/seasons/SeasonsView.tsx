@@ -167,5 +167,16 @@ function normalizeCalendar(payload: CalendarPayload): CalendarPayload {
 }
 
 function normalizeTimeline(payload: TopicsTimelinePayload): TopicsTimelinePayload {
-  return Array.isArray(payload.buckets) ? payload : { buckets: [] };
+  if (!Array.isArray(payload.buckets)) {
+    return { buckets: [] };
+  }
+  return {
+    buckets: payload.buckets.map((bucket) => ({
+      period: bucket.period,
+      total: Number(bucket.total) || 0,
+      counts: Object.fromEntries(
+        Object.entries(bucket.counts ?? {}).map(([topic, count]) => [topic, Number(count) || 0]),
+      ),
+    })),
+  };
 }

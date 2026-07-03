@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -127,6 +127,14 @@ const shortTimelinePayload = {
   ],
 };
 
+const malformedTimelinePayload = {
+  buckets: [
+    { period: "2026-W07", counts: { work: "abc" } },
+    { period: "2026-W08", total: "5", counts: { work: "2" } },
+    { period: "2026-W09", total: 0, counts: { work: 1 } },
+  ],
+};
+
 const mapPayload = {
   signature: "notes:3:max:2",
   computed_at: "2026-06-17T08:00:00Z",
@@ -163,7 +171,7 @@ function installFetchMock({
   map = mapPayload,
 }: {
   calendar?: typeof calendarPayload;
-  timeline?: typeof timelinePayload | typeof shortTimelinePayload | { buckets: [] };
+  timeline?: typeof timelinePayload | typeof shortTimelinePayload | typeof malformedTimelinePayload | { buckets: [] };
   map?: typeof mapPayload;
 } = {}) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -281,6 +289,36 @@ describe("Sprint 5 seasons view", () => {
     expect(screen.getByTestId("topic-stream-layer-home")).toHaveAttribute("fill-opacity", "0.28");
     expect(fillOpacity(screen.getByRole("button", { name: "2026-02-13 · CALM" }))).toBeCloseTo(0.883);
     expect(fillOpacity(screen.getByRole("button", { name: "2026-02-14 · JOY" }))).toBe(0.15);
+  });
+
+  it("shows a per-week stream tooltip for the nearest bucket and hides it on leave", async () => {
+    installFetchMock();
+
+    await renderAuthenticatedSeasons();
+    const workLayer = await screen.findByTestId("topic-stream-layer-work");
+    const graph = screen.getByLabelText("TOPIC STREAM GRAPH");
+
+    expect(graph).toHaveClass("overflow-visible");
+    expect(workLayer.querySelector("title")).toBeNull();
+
+    fireEvent.pointerMove(workLayer, { clientX: 360, clientY: 80 });
+
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "WORK · WEEK OF 2026-02-16 · 1 NOTES (20%)",
+    );
+
+    fireEvent.pointerLeave(graph);
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("coerces malformed timeline totals and counts before building stream paths", async () => {
+    installFetchMock({ timeline: malformedTimelinePayload });
+
+    await renderAuthenticatedSeasons();
+
+    const workLayer = await screen.findByTestId("topic-stream-layer-work");
+    expect(workLayer.getAttribute("d")).not.toContain("NaN");
   });
 
   it("keeps no-leak guarantees and handles short or empty topic/calendar responses", async () => {

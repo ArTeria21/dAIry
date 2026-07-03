@@ -6,13 +6,14 @@ import {
   stackOrderInsideOut,
   type SeriesPoint,
 } from "d3-shape";
-import { useMemo } from "react";
+import { useMemo, useState, type PointerEvent } from "react";
 
 import { clusterPalette } from "../design/palettes";
 import { chromeTextClass } from "../design/theme";
 import type { TopicBucket } from "../services/insights";
 import { cx } from "../ui/classNames";
 import { Legend, type LegendItem } from "../ui/Legend";
+import { monthFirstInWeek } from "./monthLabels";
 
 const excludedFromTop = ["reflection"]; // Default journal topic; keep it from dominating the top-8 signal.
 const otherKey = "OTHER";
@@ -46,6 +47,13 @@ type TopicsStreamProps = {
   buckets: TopicBucket[];
   selectedTopic: string;
   onSelectTopic: (topic: string) => void;
+};
+
+type StreamTooltipState = {
+  index: number;
+  left: number;
+  top: number;
+  topic: string;
 };
 
 export function TopicsStream({ buckets, onSelectTopic, selectedTopic }: TopicsStreamProps) {
@@ -104,6 +112,7 @@ function StreamSvg({
     .offset(stackOffsetWiggle)
     .order(stackOrderInsideOut)(model.data);
   const extent = stackExtent(stacked);
+  const [tooltip, setTooltip] = useState<StreamTooltipState | null>(null);
   const path = area<SeriesPoint<StreamDatum>>()
     .x((_point, index) => xForIndex(index, model.data.length))
     .y0((point) => yScale(point[0], extent))
@@ -111,51 +120,71 @@ function StreamSvg({
     .curve(curveBasis);
 
   return (
-    <svg aria-label="TOPIC STREAM GRAPH" className="w-full" role="img" viewBox={`0 0 ${streamWidth} ${streamHeight}`}>
-      {monthTicks(model.data).map((tick) => (
-        <text
-          className={chromeTextClass}
-          fill="#858483"
-          fontSize="9"
-          key={`${tick.label}-${tick.x}`}
-          x={tick.x}
-          y="182"
-        >
-          {tick.label}
-        </text>
-      ))}
-      {stacked.map((layer) => {
-        const series = model.series.find((item) => item.key === layer.key);
-        if (!series) {
-          return null;
-        }
-        const selected = selectedTopic === series.key;
-        const dimmed = selectedTopic !== "" && !selected;
-        const pathData = path(layer) ?? "";
-
-        return (
-          <path
-            aria-label={seriesTitle(series.key, model)}
-            d={pathData}
-            data-testid={`topic-stream-layer-${series.key}`}
-            fill={series.color}
-            fillOpacity={dimmed ? 0.28 : 0.82}
-            key={series.key}
-            onClick={() => {
-              if (series.clickable) {
-                onSelectTopic(series.key);
-              }
-            }}
-            role={series.clickable ? "button" : undefined}
-            stroke={selected ? inkColor : "transparent"}
-            strokeWidth={selected ? 1.5 : 0}
-            tabIndex={series.clickable ? 0 : undefined}
+    <div className="relative">
+      <svg
+        aria-label="TOPIC STREAM GRAPH"
+        className="w-full overflow-visible"
+        onPointerLeave={() => setTooltip(null)}
+        onPointerMove={(event) => setTooltip(tooltipForPointer(event, model))}
+        role="img"
+        viewBox={`0 0 ${streamWidth} ${streamHeight}`}
+      >
+        {monthTicks(model.data).map((tick) => (
+          <text
+            className={chromeTextClass}
+            fill="#858483"
+            fontSize="9"
+            key={`${tick.label}-${tick.x}`}
+            x={tick.x}
+            y="182"
           >
-            <title>{seriesTitle(series.key, model)}</title>
-          </path>
-        );
-      })}
-    </svg>
+            {tick.label}
+          </text>
+        ))}
+        {stacked.map((layer) => {
+          const series = model.series.find((item) => item.key === layer.key);
+          if (!series) {
+            return null;
+          }
+          const selected = selectedTopic === series.key;
+          const dimmed = selectedTopic !== "" && !selected;
+          const pathData = path(layer) ?? "";
+
+          return (
+            <path
+              aria-label={seriesTitle(series.key, model)}
+              d={pathData}
+              data-testid={`topic-stream-layer-${series.key}`}
+              data-topic-key={series.key}
+              fill={series.color}
+              fillOpacity={dimmed ? 0.28 : 0.82}
+              key={series.key}
+              onClick={() => {
+                if (series.clickable) {
+                  onSelectTopic(series.key);
+                }
+              }}
+              role={series.clickable ? "button" : undefined}
+              stroke={selected ? inkColor : "transparent"}
+              strokeWidth={selected ? 1.5 : 0}
+              tabIndex={series.clickable ? 0 : undefined}
+            />
+          );
+        })}
+      </svg>
+      {tooltip ? (
+        <div
+          className={cx(
+            chromeTextClass,
+            "pointer-events-none absolute rounded-[2px] border border-hairline bg-cream-paper px-2 py-1 text-[9px] text-ink-black shadow-subtle",
+          )}
+          role="tooltip"
+          style={{ left: tooltip.left + 8, top: Math.max(0, tooltip.top - 28) }}
+        >
+          {tooltipText(tooltip, model)}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -275,16 +304,35 @@ function yScale(value: number, [min, max]: [number, number]): number {
 }
 
 function monthTicks(data: StreamDatum[]): { label: string; x: number }[] {
-  let previous = "";
   return data.flatMap((datum, index) => {
-    const monthKey = datum.weekStart.slice(0, 7);
-    if (monthKey === previous) {
-      return [];
-    }
-    previous = monthKey;
-    const month = datum.weekStart.slice(5, 7);
-    return [{ label: monthLabel(month), x: xForIndex(index, data.length) }];
+    const label = monthFirstInWeek(datum.weekStart);
+    return label ? [{ label: label.label, x: xForIndex(index, data.length) }] : [];
   });
+}
+
+function tooltipForPointer(
+  event: PointerEvent<SVGSVGElement>,
+  model: TopicStreamModel,
+): StreamTooltipState | null {
+  const target = event.target instanceof Element ? event.target.closest("[data-topic-key]") : null;
+  const topic = target?.getAttribute("data-topic-key");
+  if (!topic) {
+    return null;
+  }
+  const rect = event.currentTarget.getBoundingClientRect();
+  const renderedWidth = rect.width || streamWidth;
+  const renderedHeight = rect.height || streamHeight;
+  const left = Math.max(0, Math.min(renderedWidth, event.clientX - rect.left));
+  const top = Math.max(0, Math.min(renderedHeight, event.clientY - rect.top));
+  const index = Math.max(0, Math.min(model.data.length - 1, Math.round((left / renderedWidth) * (model.data.length - 1))));
+  return { index, left, top, topic };
+}
+
+function tooltipText(tooltip: StreamTooltipState, model: TopicStreamModel): string {
+  const datum = model.data[tooltip.index];
+  const count = datum?.counts[tooltip.topic] ?? 0;
+  const share = datum?.shares[tooltip.topic] ?? 0;
+  return `${tooltip.topic.toUpperCase()} · WEEK OF ${datum?.weekStart ?? ""} · ${count} NOTES (${Math.round(share * 100)}%)`;
 }
 
 function seriesTitle(topic: string, model: TopicStreamModel): string {
@@ -336,10 +384,4 @@ function isoDate(value: Date): string {
 
 function isIsoDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
-function monthLabel(month: string): string {
-  return ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"][
-    Number(month) - 1
-  ];
 }

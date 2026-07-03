@@ -6,6 +6,7 @@ import {
   clusterColor,
   moodPalette,
   noiseColor,
+  topicDimmedColor,
   topicPointColor,
   topicPointHighlightColor,
   topicMutedColor,
@@ -57,6 +58,8 @@ const minZoom = 0.5;
 const maxZoom = 6;
 const zoomIntensity = 0.0008;
 const baseGridSize = 96;
+const labelEstimateWidthPx = 7;
+const labelEstimateHeightPx = 14;
 const moodOrder: Mood[] = ["joy", "calm", "sadness", "anger", "fear", "neutral", "mixed"];
 const allTopicsLegendKey = "__all_topics__";
 const unclusteredLegendKey = "__unclustered__";
@@ -67,12 +70,15 @@ export function MapView() {
   const [highlight, setHighlight] = useState<Highlight | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<MapPoint | null>(null);
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+  const [hiddenPointIds, setHiddenPointIds] = useState<Set<string>>(() => new Set());
+  const [notePanelStatus, setNotePanelStatus] = useState("");
   const [note, setNote] = useState<NoteDetails | null>(null);
   const [noteReloading, setNoteReloading] = useState(false);
   const [noteUnavailable, setNoteUnavailable] = useState(false);
   const [viewTransform, setViewTransform] = useState<ViewTransform>(initialViewTransform);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const mapPanelRef = useRef<HTMLElement | null>(null);
+  const noteLoadGenerationRef = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -123,6 +129,7 @@ export function MapView() {
   }, [payload]);
 
   async function selectPoint(point: MapPoint) {
+    setNotePanelStatus("");
     setSelectedPointId(point.id);
     await loadNote(point.id);
   }
@@ -141,6 +148,8 @@ export function MapView() {
   }
 
   async function loadNote(id: string, options: LoadNoteOptions = {}): Promise<NoteDetails | null> {
+    const generation = noteLoadGenerationRef.current + 1;
+    noteLoadGenerationRef.current = generation;
     const keepCurrent = options.keepCurrent === true;
     if (keepCurrent) {
       setNoteReloading(true);
@@ -151,16 +160,22 @@ export function MapView() {
     setNoteUnavailable(false);
     try {
       const nextNote = await fetchNoteDetails(id);
-      setNote(nextNote);
+      if (noteLoadGenerationRef.current === generation) {
+        setNote(nextNote);
+      }
       return nextNote;
     } catch {
-      setNoteUnavailable(true);
+      if (noteLoadGenerationRef.current === generation) {
+        setNoteUnavailable(true);
+      }
       if (keepCurrent) {
         throw new Error("NOTE RELOAD FAILED");
       }
       return null;
     } finally {
-      setNoteReloading(false);
+      if (noteLoadGenerationRef.current === generation) {
+        setNoteReloading(false);
+      }
     }
   }
 
@@ -205,6 +220,7 @@ export function MapView() {
   if (!payload) {
     return <p className={chromeTextClass}>LOADING MAP</p>;
   }
+  const visiblePoints = payload.points.filter((point) => !hiddenPointIds.has(point.id));
 
   return (
     <div className="grid gap-5">
@@ -223,7 +239,7 @@ export function MapView() {
         highlight={highlight}
         nNoise={payload.n_noise}
         onHighlightToggle={toggleHighlight}
-        points={payload.points}
+        points={visiblePoints}
       />
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -240,7 +256,7 @@ export function MapView() {
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
         >
-          {payload.points.length === 0 ? (
+          {visiblePoints.length === 0 ? (
             <div className={cx(mapSurfaceHeightClass, "grid place-items-center")}>
               <p className={cx(chromeTextClass, "text-[11px] text-slate")}>NO NOTES TO MAP</p>
             </div>
@@ -255,8 +271,15 @@ export function MapView() {
                   transformOrigin: "0px 0px",
                 }}
               >
-                <ClusterLayer clusters={payload.clusters} highlight={highlight} points={payload.points} />
-                {payload.points.map((point) => (
+                {colorMode === "cluster" ? (
+                  <ClusterLayer
+                    clusters={payload.clusters}
+                    highlight={highlight}
+                    points={visiblePoints}
+                    viewTransform={viewTransform}
+                  />
+                ) : null}
+                {visiblePoints.map((point) => (
                   <PointButton
                     colorMode={colorMode}
                     highlight={highlight}
@@ -288,6 +311,16 @@ export function MapView() {
           note={note}
           noteUnavailable={noteUnavailable}
           noteReloading={noteReloading}
+          noteStatus={notePanelStatus}
+          onDeleted={(status) => {
+            if (selectedPointId !== null) {
+              setHiddenPointIds((current) => new Set([...current, selectedPointId]));
+            }
+            setSelectedPointId(null);
+            setNote(null);
+            setNoteUnavailable(false);
+            setNotePanelStatus(status);
+          }}
           onReload={reloadSelectedNote}
           selectedPointId={selectedPointId}
         />
@@ -403,47 +436,114 @@ function ClusterLayer({
   clusters,
   highlight,
   points,
+  viewTransform,
 }: {
   clusters: MapCluster[];
   highlight: Highlight | null;
   points: MapPoint[];
+  viewTransform: ViewTransform;
 }) {
   const activeClusterKey = highlight?.mode === "cluster" ? highlight.key : null;
+  const labels = clusterLabels(clusters, points, activeClusterKey, viewTransform);
 
   return (
     <svg aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full">
-      {clusters.map((cluster) => {
-        const clusterPoints = points.filter((point) => point.cluster_id === cluster.id);
-        const box = clusterBox(clusterPoints);
-        const dimmed = activeClusterKey !== null && activeClusterKey !== String(cluster.id);
-
+      {labels.map((label) => {
+        const dimmed = activeClusterKey !== null && activeClusterKey !== String(label.cluster.id);
         return (
-          <g key={cluster.id} opacity={dimmed ? 0.28 : 1}>
-            <rect
-              data-testid={`cluster-hull-${cluster.id}`}
-              fill="none"
-              height={`${box.height}%`}
-              rx="2"
-              stroke={schematicBlue}
-              strokeWidth="1"
-              width={`${box.width}%`}
-              x={`${box.x}%`}
-              y={`${box.y}%`}
-            />
+          <g key={label.cluster.id} opacity={dimmed ? 0.48 : 1}>
             <text
               className={cx(chromeTextClass, "font-plexmono")}
-              fill={schematicBlue}
+              data-testid={`cluster-label-${label.cluster.id}`}
+              fill={dimmed ? "#858483" : schematicBlue}
               fontSize="11"
-              x={`${box.x}%`}
-              y={`${Math.max(4, box.y - 2)}%`}
+              paintOrder="stroke"
+              stroke="#f5f4f1"
+              strokeLinejoin="round"
+              strokeWidth="3"
+              style={{ textShadow: "0 0 3px #f5f4f1" }}
+              textAnchor="middle"
+              x={formatPercent(label.x)}
+              y={formatPercent(label.y)}
             >
-              {cluster.label.toUpperCase()}
+              {label.cluster.label.toUpperCase()}
             </text>
           </g>
         );
       })}
     </svg>
   );
+}
+
+type ClusterLabel = {
+  cluster: MapCluster;
+  x: number;
+  y: number;
+  bbox: LabelBox;
+};
+
+type LabelBox = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+function clusterLabels(
+  clusters: MapCluster[],
+  points: MapPoint[],
+  activeClusterKey: string | null,
+  viewTransform: ViewTransform,
+): ClusterLabel[] {
+  const candidates = clusters
+    .map((cluster) => clusterLabelCandidate(cluster, points, viewTransform))
+    .filter((label): label is ClusterLabel => label !== null)
+    .sort((left, right) => {
+      const leftActive = activeClusterKey === String(left.cluster.id) ? 1 : 0;
+      const rightActive = activeClusterKey === String(right.cluster.id) ? 1 : 0;
+      return rightActive - leftActive || right.cluster.size - left.cluster.size || left.cluster.id - right.cluster.id;
+    });
+
+  const placed: ClusterLabel[] = [];
+  for (const candidate of candidates) {
+    const active = activeClusterKey === String(candidate.cluster.id);
+    if (active || placed.every((label) => !boxesIntersect(label.bbox, candidate.bbox))) {
+      placed.push(candidate);
+    }
+  }
+  return placed;
+}
+
+function clusterLabelCandidate(
+  cluster: MapCluster,
+  points: MapPoint[],
+  viewTransform: ViewTransform,
+): ClusterLabel | null {
+  const clusterPoints = points.filter((point) => point.cluster_id === cluster.id);
+  if (clusterPoints.length === 0) {
+    return null;
+  }
+  const x = median(clusterPoints.map((point) => point.x)) * 100;
+  const y = (1 - median(clusterPoints.map((point) => point.y))) * 100;
+  const scale = Math.max(viewTransform.scale, 0.1);
+  const width = (cluster.label.length * labelEstimateWidthPx) / scale;
+  const height = labelEstimateHeightPx / scale;
+
+  return {
+    cluster,
+    x,
+    y,
+    bbox: {
+      left: x - width / 2,
+      right: x + width / 2,
+      top: y - height,
+      bottom: y,
+    },
+  };
+}
+
+function boxesIntersect(left: LabelBox, right: LabelBox): boolean {
+  return left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
 }
 
 function PointButton({
@@ -490,21 +590,25 @@ function PointButton({
 
 function NotePanel({
   note,
+  noteStatus,
   noteUnavailable,
   noteReloading,
+  onDeleted,
   onReload,
   selectedPointId,
 }: {
   note: NoteDetails | null;
+  noteStatus: string;
   noteUnavailable: boolean;
   noteReloading: boolean;
+  onDeleted: (status: string) => void;
   onReload: () => Promise<{ rawText: string; rawTextSha256: string } | null>;
   selectedPointId: string | null;
 }) {
   if (selectedPointId === null) {
     return (
       <aside className={cx(notePanelFrameClass, "p-5")}>
-        <p className={cx(chromeTextClass, "text-[10px] text-slate")}>SELECT A NOTE</p>
+        <p className={cx(chromeTextClass, "text-[10px] text-slate")}>{noteStatus || "SELECT A NOTE"}</p>
       </aside>
     );
   }
@@ -551,6 +655,7 @@ function NotePanel({
       <p className={cx(readingTextClass, "whitespace-pre-wrap text-[15px] leading-7")}>{note.raw_text}</p>
       <NoteEditor
         noteId={String(note.id)}
+        onDeleted={onDeleted}
         onReload={onReload}
         rawText={note.raw_text}
         rawTextSha256={note.raw_text_sha256}
@@ -586,7 +691,7 @@ function pointColor(point: MapPoint, colorMode: ColorMode, highlight: Highlight 
 
   if (colorMode === "topic") {
     const activeTopic = activeHighlight(highlight, "topic");
-    return !activeTopic ? topicPointColor : point.topics.includes(activeTopic.key) ? topicPointHighlightColor : topicMutedColor;
+    return !activeTopic ? topicPointColor : point.topics.includes(activeTopic.key) ? topicPointHighlightColor : topicDimmedColor;
   }
 
   const activeCluster = activeHighlight(highlight, "cluster");
@@ -693,25 +798,13 @@ function legendTestId(kind: "cluster" | "mood", value: string): string {
   return `legend-swatch-${kind}-${value.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase()}`;
 }
 
-function clusterBox(points: MapPoint[]) {
-  if (points.length === 0) {
-    return { x: 8, y: 8, width: 16, height: 16 };
+function median(values: number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) {
+    return sorted[middle];
   }
-
-  const xs = points.map((point) => point.x * 100);
-  const ys = points.map((point) => (1 - point.y) * 100);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const pad = 7;
-
-  return {
-    x: Math.max(2, minX - pad),
-    y: Math.max(6, minY - pad),
-    width: Math.max(14, maxX - minX + pad * 2),
-    height: Math.max(14, maxY - minY + pad * 2),
-  };
+  return (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function emptyMapPayload(): MapPayload {
@@ -769,4 +862,8 @@ function normalizeCoordinate(value: number, min: number, span: number): number {
 
 function formatPx(value: number): string {
   return `${Number(value.toFixed(2))}px`;
+}
+
+function formatPercent(value: number): string {
+  return `${Number(value.toFixed(4))}%`;
 }

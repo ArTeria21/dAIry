@@ -7,6 +7,7 @@ import {
   clusterColor,
   moodPalette,
   noiseColor,
+  topicDimmedColor,
   topicPointColor,
   topicPointHighlightColor,
   topicMutedColor,
@@ -108,12 +109,14 @@ function installMapEditFetchMock({
   map = mapPayload,
   noteId = "1",
   initialNote = notePayload,
+  deleteStatus = 200,
   putStatus = 200,
   reloadedNote = notePayload,
 }: {
   map?: unknown;
   noteId?: string;
   initialNote?: unknown;
+  deleteStatus?: number;
   putStatus?: number;
   reloadedNote?: unknown;
 } = {}) {
@@ -137,6 +140,12 @@ function installMapEditFetchMock({
     }
     if (url.endsWith(noteUrl) && method === "PUT") {
       return jsonResponse({ id: noteId, new_sha256: "edited-note-sha" }, putStatus);
+    }
+    if (url.endsWith(noteUrl) && method === "DELETE") {
+      return jsonResponse(
+        deleteStatus === 200 ? { id: noteId, deleted: true } : { detail: "delete failed" },
+        deleteStatus,
+      );
     }
 
     return jsonResponse({ detail: `Unexpected request: ${url}` }, 500);
@@ -277,7 +286,7 @@ describe("Phase 3 map view", () => {
       "true",
     );
     expect(screen.getByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
-    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("min-h-[74px]");
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("h-[84px]");
     expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "HOME" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: "UNCLUSTERED" })).not.toBeInTheDocument();
@@ -298,14 +307,14 @@ describe("Phase 3 map view", () => {
     expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "true");
     expect(point1.style.getPropertyValue("--point-color")).toBe(clusterColor(0));
     expect(point2.style.getPropertyValue("--point-color")).toBe(topicMutedColor);
-    expect(screen.getByTestId("cluster-hull-0").parentElement).toHaveAttribute("opacity", "1");
-    expect(screen.getByTestId("cluster-hull-1").parentElement).toHaveAttribute("opacity", "0.28");
+    expect(screen.getByTestId("cluster-label-0").parentElement).toHaveAttribute("opacity", "1");
+    expect(screen.getByTestId("cluster-label-1").parentElement).toHaveAttribute("opacity", "0.48");
 
     await userEvent.click(screen.getByRole("button", { name: "WORK" }));
 
     expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "false");
     expect(point2.style.getPropertyValue("--point-color")).toBe(clusterColor(1));
-    expect(screen.getByTestId("cluster-hull-1").parentElement).toHaveAttribute("opacity", "1");
+    expect(screen.getByTestId("cluster-label-1").parentElement).toHaveAttribute("opacity", "1");
   });
 
   it("renders unclustered noise as neutral gray with an UNCLUSTERED legend chip", async () => {
@@ -375,17 +384,114 @@ describe("Phase 3 map view", () => {
     expect(screen.queryByRole("button", { name: "UNCLUSTERED" })).not.toBeInTheDocument();
   });
 
-  it("renders thin Schematic Blue cluster hulls and uppercase mono labels", async () => {
+  it("renders no cluster hull rects and places uppercase mono labels at cluster medians", async () => {
     installFetchMock();
 
     await renderAuthenticatedMap();
 
-    expect(await screen.findByTestId("cluster-hull-0")).toHaveAttribute("stroke", "#0d6ea5");
-    expect(screen.getByTestId("cluster-hull-1")).toHaveAttribute("stroke", "#0d6ea5");
-    expect(screen.getByTestId("cluster-hull-0").nextElementSibling).toHaveTextContent("WORK");
-    expect(screen.getByTestId("cluster-hull-0").nextElementSibling).toHaveClass("font-plexmono");
-    expect(screen.getByTestId("cluster-hull-1").nextElementSibling).toHaveTextContent("HOME");
-    expect(screen.getByTestId("cluster-hull-1").nextElementSibling).toHaveClass("font-plexmono");
+    const mapPanel = await screen.findByTestId("map-panel");
+    const workLabel = screen.getByTestId("cluster-label-0");
+    const homeLabel = screen.getByTestId("cluster-label-1");
+
+    expect(mapPanel.querySelectorAll("rect")).toHaveLength(0);
+    expect(workLabel).toHaveAttribute("fill", "#0d6ea5");
+    expect(workLabel).toHaveAttribute("x", "5%");
+    expect(workLabel).toHaveAttribute("y", "5%");
+    expect(workLabel).toHaveTextContent("WORK");
+    expect(workLabel).toHaveClass("font-plexmono");
+    expect(homeLabel).toHaveTextContent("HOME");
+    expect(homeLabel).toHaveClass("font-plexmono");
+  });
+
+  it("skips cluster labels without visible finite points", async () => {
+    installFetchMock({
+      preserveMapObject: true,
+      map: {
+        ...mapPayload,
+        points: [
+          { ...mapPayload.points[0], cluster_id: 0, x: 0, y: 0 },
+          { ...mapPayload.points[1], cluster_id: 2, x: Number.NaN, y: 0.5 },
+        ],
+        clusters: [
+          { id: 0, label: "visible", size: 1, dominant_topics: ["work"] },
+          { id: 2, label: "hidden", size: 1, dominant_topics: ["lost"] },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+
+    expect(await screen.findByTestId("cluster-label-0")).toHaveTextContent("VISIBLE");
+    expect(screen.queryByTestId("cluster-label-2")).not.toBeInTheDocument();
+  });
+
+  it("hides colliding smaller cluster labels until their legend chip is selected", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        points: [
+          { ...mapPayload.points[0], id: "a1", x: 0.5, y: 0.5, cluster_id: 0 },
+          { ...mapPayload.points[1], id: "a2", x: 0.5, y: 0.5, cluster_id: 0 },
+          { ...mapPayload.points[1], id: "b1", x: 0.5, y: 0.5, cluster_id: 1 },
+        ],
+        clusters: [
+          { id: 0, label: "larger", size: 2, dominant_topics: ["work"] },
+          { id: 1, label: "smaller", size: 1, dominant_topics: ["home"] },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+
+    expect(await screen.findByTestId("cluster-label-0")).toHaveTextContent("LARGER");
+    expect(screen.queryByTestId("cluster-label-1")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "SMALLER" }));
+
+    expect(screen.getByTestId("cluster-label-1")).toHaveTextContent("SMALLER");
+    expect(screen.queryByTestId("cluster-label-0")).not.toBeInTheDocument();
+  });
+
+  it("recomputes label collisions after zooming so separated cluster labels can appear", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        points: [
+          { ...mapPayload.points[0], id: "anchor", x: 0, y: 0, cluster_id: -1 },
+          { ...mapPayload.points[0], id: "a1", x: 0.45, y: 0.5, cluster_id: 0 },
+          { ...mapPayload.points[1], id: "b1", x: 0.55, y: 0.5, cluster_id: 1 },
+        ],
+        clusters: [
+          { id: 0, label: "alpha", size: 1, dominant_topics: ["work"] },
+          { id: 1, label: "bravo", size: 1, dominant_topics: ["home"] },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+    const viewport = await screen.findByTestId("map-viewport");
+
+    expect(await screen.findByTestId("cluster-label-0")).toHaveTextContent("ALPHA");
+    expect(screen.queryByTestId("cluster-label-1")).not.toBeInTheDocument();
+
+    for (let index = 0; index < 10; index += 1) {
+      fireEvent.wheel(viewport, { deltaY: -240, clientX: 320, clientY: 240 });
+    }
+
+    expect(await screen.findByTestId("cluster-label-1")).toHaveTextContent("BRAVO");
+  });
+
+  it("renders cluster labels only in CLUSTER mode", async () => {
+    installFetchMock();
+
+    await renderAuthenticatedMap();
+    expect(await screen.findByTestId("cluster-label-0")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "MOOD" }));
+    expect(screen.queryByTestId("cluster-label-0")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "TOPIC" }));
+    expect(screen.queryByTestId("cluster-label-0")).not.toBeInTheDocument();
   });
 
   it("selecting MOOD recolors points with the shared mood palette", async () => {
@@ -457,11 +563,11 @@ describe("Phase 3 map view", () => {
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       topicMutedColor,
     );
-    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("min-h-[74px]");
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("h-[84px]");
 
     await userEvent.click(screen.getByRole("button", { name: "MOOD" }));
 
-    expect(screen.getByLabelText("MOOD LEGEND")).toHaveClass("min-h-[74px]");
+    expect(screen.getByLabelText("MOOD LEGEND")).toHaveClass("h-[84px]");
     expect(screen.getByRole("button", { name: "CALM" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       moodPalette.joy,
@@ -491,7 +597,7 @@ describe("Phase 3 map view", () => {
       topicPointHighlightColor,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
-      topicMutedColor,
+      topicDimmedColor,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "WORK" }));
@@ -533,7 +639,7 @@ describe("Phase 3 map view", () => {
     await userEvent.click(screen.getByRole("button", { name: "LOOSE" }));
     expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicPointHighlightColor);
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
-      topicMutedColor,
+      topicDimmedColor,
     );
   });
 
@@ -697,6 +803,84 @@ describe("Phase 3 map view", () => {
       expect(within(panel).queryByText("SAVED · ENRICHMENT WILL UPDATE LATER")).not.toBeInTheDocument();
     });
     expect(within(panel).getByRole("button", { name: "EDIT" })).toBeInTheDocument();
+  });
+
+  it("successful NotePanel delete requires confirmation, hides the point, and resets selection", async () => {
+    const fetchMock = installMapEditFetchMock();
+
+    await renderAuthenticatedMap();
+    const point1 = await screen.findByRole("button", { name: "NOTE 1" });
+    await userEvent.click(point1);
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+
+    await userEvent.click(within(panel).getByRole("button", { name: "DELETE" }));
+
+    expect(await within(panel).findByText("DELETE THIS NOTE?")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/notes/1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+
+    await userEvent.click(within(panel).getByRole("button", { name: "CONFIRM DELETE" }));
+
+    expect(await screen.findByText("NOTE DELETED · MAP WILL UPDATE AFTER RE-ENRICHMENT")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "NOTE 1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "NOTE 2" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/notes/1",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        body: JSON.stringify({ expected_sha256: "note-sha" }),
+      }),
+    );
+  });
+
+  it("NotePanel delete handles 409 by reloading the note text", async () => {
+    installMapEditFetchMock({
+      deleteStatus: 409,
+      reloadedNote: {
+        ...notePayload,
+        raw_text: "Server changed before delete.",
+        raw_text_sha256: "server-delete-sha",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    await userEvent.click(within(panel).getByRole("button", { name: "DELETE" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "CONFIRM DELETE" }));
+
+    expect(await within(panel).findByText("NOTE CHANGED ELSEWHERE — RELOADED")).toBeInTheDocument();
+    expect(within(panel).getByText("Server changed before delete.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "NOTE 1" })).toBeInTheDocument();
+  });
+
+  it("NotePanel delete treats 404 as already deleted", async () => {
+    installMapEditFetchMock({ deleteStatus: 404 });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    await userEvent.click(within(panel).getByRole("button", { name: "DELETE" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "CONFIRM DELETE" }));
+
+    expect(await screen.findByText("NOTE ALREADY DELETED")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "NOTE 1" })).not.toBeInTheDocument();
+  });
+
+  it("NotePanel delete reports editing disabled on 502 without hiding the point", async () => {
+    installMapEditFetchMock({ deleteStatus: 502 });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    await userEvent.click(within(panel).getByRole("button", { name: "DELETE" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "CONFIRM DELETE" }));
+
+    expect(await within(panel).findByText("EDITING DISABLED")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "NOTE 1" })).toBeInTheDocument();
   });
 
   it("renders an empty map state with no note point controls", async () => {
@@ -976,6 +1160,51 @@ describe("Map interaction regressions", () => {
     expect(await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" })).toBeInTheDocument();
   });
 
+  it("keeps the latest selected note when an earlier note request resolves late", async () => {
+    let resolveFirstNote: (response: Response) => void = () => undefined;
+    const secondNote = {
+      ...notePayload,
+      id: "2",
+      raw_text: "Second note wins the race.",
+      raw_text_sha256: "note-2-sha",
+      date: "2026-02-14",
+      mood: "joy",
+      topics: ["home"],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/api/auth/me")) {
+        return jsonResponse({ username: "artem" });
+      }
+      if (url.endsWith("/api/map")) {
+        return jsonResponse(mapPayload);
+      }
+      if (url.endsWith("/api/notes/1")) {
+        return new Promise<Response>((resolve) => {
+          resolveFirstNote = resolve;
+        });
+      }
+      if (url.endsWith("/api/notes/2")) {
+        return jsonResponse(secondNote);
+      }
+      return jsonResponse({ detail: `Unexpected request: ${url}` }, 500);
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+    await userEvent.click(screen.getByRole("button", { name: "NOTE 2" }));
+
+    expect(await screen.findByRole("complementary", { name: "NOTE 2 DETAILS" })).toHaveTextContent(
+      "Second note wins the race.",
+    );
+    resolveFirstNote(jsonResponse(notePayload));
+    await waitFor(() => {
+      expect(screen.getByRole("complementary", { name: "NOTE 2 DETAILS" })).toHaveTextContent(
+        "Second note wins the race.",
+      );
+    });
+  });
+
   it("recolors points by mood and selected topic after zooming and panning the data layer", async () => {
     installFetchMock();
 
@@ -1005,7 +1234,7 @@ describe("Map interaction regressions", () => {
       topicPointHighlightColor,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
-      topicMutedColor,
+      topicDimmedColor,
     );
   });
 

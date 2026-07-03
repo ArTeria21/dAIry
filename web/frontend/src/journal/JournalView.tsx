@@ -132,6 +132,16 @@ export function JournalView({ date }: { date?: string }) {
               <p className={cx(readingTextClass, "whitespace-pre-wrap text-[15px] leading-7")}>{note.raw_text}</p>
               <NoteEditor
                 noteId={note.id}
+                onDeleted={() =>
+                  loadDay()
+                    .then((nextPayload) => fetchJournalMonth(nextPayload.date.slice(0, 7)))
+                    .then((index) => {
+                      setMonthDays(index.days);
+                    })
+                    .catch(() => {
+                      setMonthDays([]);
+                    })
+                }
                 onReload={() =>
                   loadDay().then((nextPayload) => {
                     const reloadedNote = nextPayload.notes.find((item) => item.id === note.id);

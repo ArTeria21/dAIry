@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import bot as bot_module
 from dairy_bot.services import storage
 from dairy_bot.services.enrichment_schemas import DayEnrichment, Mood, NoteEnrichment, Topic
-from dairy_bot.services.note_editing import note_text_sha256, replace_note_text
+from dairy_bot.services.note_editing import delete_note_block, note_text_sha256, replace_note_text
 
 
 TZ = ZoneInfo("Europe/Vienna")
@@ -288,6 +288,49 @@ def test_AC_5_entry_deletion_retriggers_day_enrichment_only(tmp_path, monkeypatc
 
     assert client.note_calls == 2
     assert client.day_calls == 2
+
+
+def test_sprint_7_reconcile_prunes_deleted_note_rows_and_duplicate_id_shifts(tmp_path, monkeypatch):
+    path = run(
+        storage.append_entry(
+            tmp_path,
+            "First duplicate text",
+            moment=datetime(2026, 6, 13, 9, 0, tzinfo=TZ),
+            timezone=TZ,
+        )
+    )
+    run(
+        storage.append_entry(
+            tmp_path,
+            "Second duplicate text",
+            moment=datetime(2026, 6, 13, 9, 0, tzinfo=TZ),
+            timezone=TZ,
+        )
+    )
+    settings, git, client = _setup(tmp_path, monkeypatch)
+
+    _reconcile(settings, git)
+    deletion = delete_note_block(
+        content=read_text(path),
+        note_id="2026-06-13T09:00",
+        note_path=path.relative_to(tmp_path),
+        expected_sha256=note_text_sha256("First duplicate text"),
+    )
+    path.write_text(deletion.content, encoding="utf-8")
+
+    _reconcile(settings, git)
+
+    with sqlite3.connect(settings.enrichment_db_path) as conn:
+        note_ids = [row[0] for row in conn.execute("SELECT id FROM notes ORDER BY id")]
+        state_ids = [row[0] for row in conn.execute("SELECT id FROM note_entry_state ORDER BY id")]
+        row = conn.execute("SELECT note_path FROM notes WHERE id = ?", ("2026-06-13T09:00",)).fetchone()
+
+    assert note_ids == ["2026-06-13T09:00"]
+    assert state_ids == ["2026-06-13T09:00"]
+    assert row == ("2026/06/2026-06-13.md",)
+    assert "First duplicate text" not in read_text(path)
+    assert "Second duplicate text" in read_text(path)
+    assert client.note_calls == 3
 
 
 def test_AC_6_missing_watchdog_state_does_not_reenrich_existing_vault(

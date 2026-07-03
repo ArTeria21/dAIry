@@ -40,4 +40,11 @@ describe("Phase 2 frontend foundation tokens", () => {
     expect(Tag({ children: "CALM" }).props.className).toContain("rounded-[2px]");
     expect(Tag({ children: "CALM" }).props.className).not.toContain("rounded-full");
   });
+
+  it("keeps dark buttons from carrying conflicting text color utilities", () => {
+    const className = Button({ children: "SAVE", variant: "dark" }).props.className;
+
+    expect(className).toContain("text-cream-paper");
+    expect(className).not.toContain("text-ink-black");
+  });
 });

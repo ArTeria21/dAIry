@@ -70,9 +70,16 @@ class FakeEditClient:
     def __init__(self, responses: list[tuple[int, dict[str, object]]]):
         self.responses = list(responses)
         self.calls: list[dict[str, str]] = []
+        self.delete_calls: list[dict[str, str]] = []
 
     def replace_text(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]:
         self.calls.append(payload)
+        if not self.responses:
+            return 500, {"detail": "unexpected"}
+        return self.responses.pop(0)
+
+    def delete_note(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]:
+        self.delete_calls.append(payload)
         if not self.responses:
             return 500, {"detail": "unexpected"}
         return self.responses.pop(0)
@@ -670,6 +677,90 @@ def test_sprint_4_put_note_maps_bot_statuses(tmp_path):
     response = client.put(
         f"/api/notes/{note.id}",
         json={"new_text": "Updated", "expected_sha256": "old-hash"},
+    )
+    assert response.status_code == 502
+
+
+def test_sprint_7_delete_note_proxies_to_bot_with_db_note_path_and_auth(tmp_path):
+    note = make_note()
+    fake_edit = FakeEditClient([(200, {"deleted": True})])
+    client = build_store_client(tmp_path, notes=[note], days=[], edit_client=fake_edit)
+
+    assert client.request(
+        "DELETE",
+        f"/api/notes/{note.id}",
+        json={"expected_sha256": "old-hash"},
+    ).status_code == 401
+
+    login(client)
+    response = client.request(
+        "DELETE",
+        f"/api/notes/{note.id}",
+        json={"expected_sha256": "old-hash", "note_path": "evil.md"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": note.id, "deleted": True}
+    assert fake_edit.delete_calls == [
+        {
+            "note_id": note.id,
+            "note_path": note.note_path,
+            "expected_sha256": "old-hash",
+        }
+    ]
+
+
+def test_sprint_7_delete_note_validation_missing_note_and_disabled_editing(tmp_path):
+    note = make_note()
+    fake_edit = FakeEditClient([(200, {"deleted": True})])
+    client = build_store_client(tmp_path, notes=[note], days=[], edit_client=fake_edit)
+    disabled = build_store_client(tmp_path / "disabled", notes=[note], days=[])
+    login(client)
+    login(disabled)
+
+    invalid = client.request("DELETE", f"/api/notes/{note.id}", json={})
+    missing = client.request(
+        "DELETE",
+        "/api/notes/2026-06-17T10:00",
+        json={"expected_sha256": "old-hash"},
+    )
+    disabled_response = disabled.request(
+        "DELETE",
+        f"/api/notes/{note.id}",
+        json={"expected_sha256": "old-hash"},
+    )
+
+    assert invalid.status_code == 422
+    assert missing.status_code == 404
+    assert fake_edit.delete_calls == []
+    assert disabled_response.status_code == 502
+    assert disabled_response.json()["detail"] == "editing disabled"
+
+
+def test_sprint_7_delete_note_maps_bot_statuses(tmp_path):
+    note = make_note()
+
+    for status in (404, 409, 422):
+        fake_edit = FakeEditClient([(status, {"detail": f"bot {status}"})])
+        client = build_store_client(tmp_path / f"delete-{status}", notes=[note], days=[], edit_client=fake_edit)
+        login(client)
+
+        response = client.request(
+            "DELETE",
+            f"/api/notes/{note.id}",
+            json={"expected_sha256": "old-hash"},
+        )
+
+        assert response.status_code == status
+        assert response.json()["detail"] == f"bot {status}"
+
+    fake_edit = FakeEditClient([(500, {"detail": "boom"})])
+    client = build_store_client(tmp_path / "delete-500", notes=[note], days=[], edit_client=fake_edit)
+    login(client)
+    response = client.request(
+        "DELETE",
+        f"/api/notes/{note.id}",
+        json={"expected_sha256": "old-hash"},
     )
     assert response.status_code == 502
 

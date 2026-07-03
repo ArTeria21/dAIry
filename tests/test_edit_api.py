@@ -17,14 +17,16 @@ class FakeGit:
         self.mutate_on_prepare = mutate_on_prepare
         self.prepare_calls = 0
         self.committed_paths = []
+        self.commit_messages = []
 
     def prepare_for_write(self):
         self.prepare_calls += 1
         if self.mutate_on_prepare is not None:
             self.mutate_on_prepare()
 
-    def commit_and_push(self, paths):
+    def commit_and_push(self, paths, *, commit_message=None):
         self.committed_paths.append(list(paths))
+        self.commit_messages.append(commit_message)
         if self.fail_push:
             raise GitPushError("push failed")
         return SimpleNamespace(pushed=True)
@@ -46,12 +48,12 @@ def payload(expected_sha256: str, new_text: str = "Updated text."):
     }
 
 
-async def request(app, body, *, token: str = "secret"):
+async def request(app, body, *, token: str = "secret", endpoint: str = "/internal/notes/replace-text"):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
         response = await client.post(
-            "/internal/notes/replace-text",
+            endpoint,
             json=body,
             headers={"X-Edit-Token": token},
         )
@@ -78,6 +80,7 @@ def test_edit_api_happy_path_replaces_text_and_commits(tmp_path):
     assert path.read_text(encoding="utf-8") == "## 09:00\n\nUpdated text.\n\n"
     assert git.prepare_calls == 1
     assert git.committed_paths == [[path]]
+    assert git.commit_messages == [None]
 
 
 def test_edit_api_rejects_bad_token_and_validation_without_changing_file(tmp_path):
@@ -133,4 +136,85 @@ def test_edit_api_push_failure_still_returns_success_after_local_write(tmp_path)
     assert status == 200
     assert body["new_sha256"] == note_text_sha256("Updated text.")
     assert "Updated text." in path.read_text(encoding="utf-8")
+    assert git.committed_paths == [[path]]
+
+
+def test_delete_api_happy_path_removes_text_and_commits_with_message(tmp_path):
+    path = write_note(tmp_path, "## 09:00\n\nOriginal text.\n\n## 10:00\n\nNeighbor text.\n")
+    git = FakeGit()
+
+    status, body = asyncio.run(
+        request(
+            make_app(tmp_path, git),
+            {
+                "note_id": "2026-06-16T09:00",
+                "note_path": "2026/06/2026-06-16.md",
+                "expected_sha256": note_text_sha256("Original text."),
+            },
+            endpoint="/internal/notes/delete",
+        )
+    )
+
+    assert status == 200
+    assert body == {"deleted": True}
+    assert path.read_text(encoding="utf-8") == "## 10:00\n\nNeighbor text.\n"
+    assert git.prepare_calls == 1
+    assert git.committed_paths == [[path]]
+    assert git.commit_messages == ["web delete: 2026-06-16T09:00"]
+
+
+def test_delete_api_rejects_bad_token_validation_conflict_and_missing_without_changing_file(tmp_path):
+    path = write_note(tmp_path, "## 09:00\n\nOriginal text.\n")
+    body = {
+        "note_id": "2026-06-16T09:00",
+        "note_path": "2026/06/2026-06-16.md",
+        "expected_sha256": note_text_sha256("Original text."),
+    }
+    unauthorized = asyncio.run(
+        request(make_app(tmp_path, FakeGit()), body, token="wrong", endpoint="/internal/notes/delete")
+    )
+    invalid = asyncio.run(
+        request(make_app(tmp_path, FakeGit()), {**body, "expected_sha256": 17}, endpoint="/internal/notes/delete")
+    )
+    conflict = asyncio.run(
+        request(
+            make_app(tmp_path, FakeGit()),
+            {**body, "expected_sha256": note_text_sha256("stale")},
+            endpoint="/internal/notes/delete",
+        )
+    )
+    missing = asyncio.run(
+        request(
+            make_app(tmp_path, FakeGit()),
+            {**body, "note_id": "2026-06-16T10:00"},
+            endpoint="/internal/notes/delete",
+        )
+    )
+
+    assert unauthorized[0] == 401
+    assert invalid[0] == 422
+    assert conflict[0] == 409
+    assert missing[0] == 404
+    assert path.read_text(encoding="utf-8") == "## 09:00\n\nOriginal text.\n"
+
+
+def test_delete_api_push_failure_still_returns_success_after_local_write(tmp_path):
+    path = write_note(tmp_path, "## 09:00\n\nOriginal text.\n")
+    git = FakeGit(fail_push=True)
+
+    status, body = asyncio.run(
+        request(
+            make_app(tmp_path, git),
+            {
+                "note_id": "2026-06-16T09:00",
+                "note_path": "2026/06/2026-06-16.md",
+                "expected_sha256": note_text_sha256("Original text."),
+            },
+            endpoint="/internal/notes/delete",
+        )
+    )
+
+    assert status == 200
+    assert body == {"deleted": True}
+    assert path.read_text(encoding="utf-8") == ""
     assert git.committed_paths == [[path]]

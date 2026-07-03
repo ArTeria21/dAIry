@@ -24,5 +24,6 @@ export const themeCss = `@theme {
 
 export const readingTextClass = "font-gerstnerprogramm text-ink-black";
 
-export const chromeTextClass =
-  "font-ftsystemmono uppercase tracking-[0.015em] text-ink-black";
+export const chromeBaseClass = "font-ftsystemmono uppercase tracking-[0.015em]";
+
+export const chromeTextClass = `${chromeBaseClass} text-ink-black`;

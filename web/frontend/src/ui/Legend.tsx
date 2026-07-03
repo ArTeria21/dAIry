@@ -25,9 +25,9 @@ type SwatchStyle = CSSProperties & {
 
 export function Legend({ activeKey, ariaLabel, items, onToggle }: LegendProps) {
   return (
-    <div aria-label={ariaLabel} className="grid min-h-[74px] content-start gap-2" role="group">
+    <div aria-label={ariaLabel} className="grid h-[84px] content-start gap-2" role="group">
       <span className={cx(chromeTextClass, "text-[10px] text-slate")}>LEGEND</span>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex max-h-[68px] flex-wrap gap-2 overflow-y-auto pr-1">
         {items.map((item) => {
           const active = activeKey === item.key;
 

@@ -12,6 +12,11 @@ export type NoteEditResult = {
   new_sha256: string;
 };
 
+export type NoteDeleteResult = {
+  id: string;
+  deleted: boolean;
+};
+
 export async function saveNoteText(
   noteId: string,
   newText: string,
@@ -27,4 +32,17 @@ export async function saveNoteText(
     throw new NoteEditError("NOTE EDIT FAILED", response.status);
   }
   return response.json() as Promise<NoteEditResult>;
+}
+
+export async function deleteNote(noteId: string, expectedSha256: string): Promise<NoteDeleteResult> {
+  const response = await fetch(`/api/notes/${encodeURIComponent(noteId)}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expected_sha256: expectedSha256 }),
+  });
+  if (!response.ok) {
+    throw new NoteEditError("NOTE DELETE FAILED", response.status);
+  }
+  return response.json() as Promise<NoteDeleteResult>;
 }

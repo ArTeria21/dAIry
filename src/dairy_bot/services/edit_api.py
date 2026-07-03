@@ -12,6 +12,7 @@ from dairy_bot.config import Settings
 from dairy_bot.services.git_sync import GitPushError, GitService, GitSyncError
 from dairy_bot.services.journal_lock import get_journal_lock
 from dairy_bot.services.note_editing import (
+    delete_note_block,
     NoteEditConflict,
     NoteEditNotFound,
     NoteEditValidationError,
@@ -27,6 +28,7 @@ def create_edit_app(settings: Settings, git_service: GitService) -> web.Applicat
     app = web.Application()
     app[SETTINGS_KEY] = settings
     app[GIT_SERVICE_KEY] = git_service
+    app.router.add_post("/internal/notes/delete", _delete_note)
     app.router.add_post("/internal/notes/replace-text", _replace_text)
     return app
 
@@ -54,6 +56,14 @@ async def stop_edit_api(runner: web.AppRunner | None) -> None:
 
 
 async def _replace_text(request: web.Request) -> web.Response:
+    return await _handle_note_mutation(request, replace_text_with_sync, success_key="new_sha256")
+
+
+async def _delete_note(request: web.Request) -> web.Response:
+    return await _handle_note_mutation(request, delete_note_with_sync, success_key="deleted")
+
+
+async def _handle_note_mutation(request: web.Request, mutate, *, success_key: str) -> web.Response:
     settings = request.app[SETTINGS_KEY]
     git_service = request.app[GIT_SERVICE_KEY]
     token = _edit_token(settings)
@@ -66,7 +76,7 @@ async def _replace_text(request: web.Request) -> web.Response:
         return web.json_response({"detail": "Invalid JSON"}, status=422)
 
     try:
-        result = await replace_text_with_sync(settings, git_service, payload)
+        result = await mutate(settings, git_service, payload)
     except NoteEditValidationError as exc:
         return web.json_response({"detail": str(exc)}, status=422)
     except NoteEditConflict:
@@ -85,7 +95,7 @@ async def _replace_text(request: web.Request) -> web.Response:
         logger.exception("Unexpected edit API failure")
         return web.json_response({"detail": "edit failed"}, status=500)
 
-    return web.json_response({"new_sha256": result})
+    return web.json_response({success_key: result})
 
 
 async def replace_text_with_sync(
@@ -115,6 +125,37 @@ async def replace_text_with_sync(
         except GitPushError:
             logger.warning("Edit saved and committed locally, but push failed", exc_info=True)
         return replacement.new_sha256
+
+
+async def delete_note_with_sync(
+    settings: Settings,
+    git_service: GitService,
+    payload: dict[str, Any],
+) -> bool:
+    note_id = _required_str(payload, "note_id")
+    note_path = _required_str(payload, "note_path")
+    expected_sha256 = _required_str(payload, "expected_sha256")
+    full_path = _resolve_note_path(settings.journal_dir, note_path)
+
+    async with get_journal_lock():
+        await asyncio.to_thread(git_service.prepare_for_write)
+        content = await asyncio.to_thread(full_path.read_text, encoding="utf-8")
+        deletion = delete_note_block(
+            content=content,
+            note_id=note_id,
+            note_path=note_path,
+            expected_sha256=expected_sha256,
+        )
+        await asyncio.to_thread(full_path.write_text, deletion.content, encoding="utf-8")
+        try:
+            await asyncio.to_thread(
+                git_service.commit_and_push,
+                [full_path],
+                commit_message=f"web delete: {note_id}",
+            )
+        except GitPushError:
+            logger.warning("Delete saved and committed locally, but push failed", exc_info=True)
+        return True
 
 
 def _required_str(payload: dict[str, Any], key: str) -> str:

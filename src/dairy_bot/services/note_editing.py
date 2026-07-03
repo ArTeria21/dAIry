@@ -37,6 +37,11 @@ class NoteTextReplacement:
 
 
 @dataclass(frozen=True, slots=True)
+class NoteTextDeletion:
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
 class _EditableBlock:
     entry_id: str
     start: int
@@ -86,6 +91,23 @@ def replace_note_text(
     lines = content.splitlines(keepends=True)
     updated = "".join(lines[: block.start] + new_lines + lines[block.end :])
     return NoteTextReplacement(content=updated, new_sha256=note_text_sha256(trimmed))
+
+
+def delete_note_block(
+    *,
+    content: str,
+    note_id: str,
+    note_path: Path | str,
+    expected_sha256: str,
+) -> NoteTextDeletion:
+    block = _find_block(content, note_id=note_id, note_path=Path(note_path))
+    current_text = _canonical_lines(block.body_lines)
+    if note_text_sha256(current_text) != expected_sha256:
+        raise NoteEditConflict("note changed elsewhere")
+
+    lines = content.splitlines(keepends=True)
+    updated = _join_with_single_blank_boundary(lines[: block.start], lines[block.end :])
+    return NoteTextDeletion(content=updated)
 
 
 def _find_block(content: str, *, note_id: str, note_path: Path) -> _EditableBlock:
@@ -164,3 +186,18 @@ def _line_text(line: str) -> str:
 
 def _ensure_newline(line: str) -> str:
     return line if line.endswith(("\n", "\r")) else f"{line}\n"
+
+
+def _join_with_single_blank_boundary(prefix: list[str], suffix: list[str]) -> str:
+    while prefix and not _line_text(prefix[-1]).strip():
+        prefix = prefix[:-1]
+    while suffix and not _line_text(suffix[0]).strip():
+        suffix = suffix[1:]
+    if prefix and suffix:
+        lines = prefix + ["\n"] + suffix
+    else:
+        lines = prefix + suffix
+    content = "".join(lines)
+    if content and not content.endswith(("\n", "\r")):
+        content += "\n"
+    return content

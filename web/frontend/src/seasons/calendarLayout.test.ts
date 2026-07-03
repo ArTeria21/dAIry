@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildCalendarYearBlocks, startOfIsoWeek } from "./calendarLayout";
+import { monthFirstInWeek } from "./monthLabels";
 
 describe("Sprint 5 calendar layout", () => {
   it("groups dates into Monday-first weeks and positions month labels", () => {
@@ -38,5 +39,14 @@ describe("Sprint 5 calendar layout", () => {
 
   it("finds the Monday start of an ISO week using UTC dates", () => {
     expect(startOfIsoWeek(new Date(Date.UTC(2026, 0, 1))).toISOString().slice(0, 10)).toBe("2025-12-29");
+  });
+
+  it("uses the shared month-label rule for weeks containing the first day", () => {
+    const [block] = buildCalendarYearBlocks([{ date: "2026-02-13" }]);
+    const february = block.monthLabels.find((label) => label.label === "FEB");
+    const weekStart = startOfIsoWeek(new Date(Date.UTC(2026, 1, 1)));
+
+    expect(monthFirstInWeek(weekStart)).toEqual({ date: "2026-02-01", label: "FEB" });
+    expect(february?.weekIndex).toBe(4);
   });
 });
