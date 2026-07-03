@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { chromeTextClass, readingTextClass } from "./design/theme";
+import { JournalView } from "./journal/JournalView";
 import { MapView } from "./map/MapView";
 import { MemoryView } from "./memory/MemoryView";
 import { SeasonsView } from "./seasons/SeasonsView";
@@ -103,8 +104,8 @@ function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
 }
 
 function AuthenticatedShell({ user }: { user: SessionUser }) {
-  const [route, setRoute] = useState<RouteKey>(() => routeFromHash(window.location.hash));
-  const routes = useMemo(() => ["map", "seasons", "memory"] as const, []);
+  const [route, setRoute] = useState<RouteState>(() => routeFromHash(window.location.hash));
+  const routes = useMemo(() => ["journal", "map", "seasons", "memory"] as const, []);
 
   useEffect(() => {
     function handleHashChange() {
@@ -121,10 +122,10 @@ function AuthenticatedShell({ user }: { user: SessionUser }) {
         <nav className="flex gap-6">
           {routes.map((item) => (
             <a
-              className={`${chromeTextClass} text-[11px] ${route === item ? "text-signal-orange" : "text-slate"}`}
+              className={`${chromeTextClass} text-[11px] ${route.key === item ? "text-signal-orange" : "text-slate"}`}
               href={`#${item}`}
               key={item}
-              onClick={() => setRoute(item)}
+              onClick={() => setRoute({ key: item })}
             >
               {routeLabel(item)}
             </a>
@@ -134,26 +135,30 @@ function AuthenticatedShell({ user }: { user: SessionUser }) {
       </header>
       <section className="border-t border-hairline pt-6">
         <h2
-          aria-label={routeLabel(route)}
+          aria-label={routeLabel(route.key)}
           className="font-gerstnerprogramm text-4xl font-medium leading-[1.11] tracking-[0.012em]"
         >
-          {routeTitle(route)}
+          {routeTitle(route.key)}
         </h2>
-        {route === "map" ? (
+        {route.key === "journal" ? (
+          <div className="mt-6">
+            <JournalView date={route.param} />
+          </div>
+        ) : route.key === "map" ? (
           <div className="mt-6">
             <MapView />
           </div>
-        ) : route === "seasons" ? (
+        ) : route.key === "seasons" ? (
           <div className="mt-6">
             <SeasonsView />
           </div>
-        ) : route === "memory" ? (
+        ) : route.key === "memory" ? (
           <div className="mt-6">
             <MemoryView />
           </div>
         ) : (
           <p className={`${readingTextClass} mt-4 max-w-xl text-sm leading-6 text-slate`}>
-            {routeDescription(route)}
+            {routeDescription(route.key)}
           </p>
         )}
       </section>
@@ -161,18 +166,24 @@ function AuthenticatedShell({ user }: { user: SessionUser }) {
   );
 }
 
-type RouteKey = "map" | "seasons" | "memory";
+type RouteKey = "journal" | "map" | "seasons" | "memory";
+type RouteState = { key: RouteKey; param?: string };
 
-function routeFromHash(hash: string): RouteKey {
-  const normalized = hash.replace("#", "");
-  if (normalized === "seasons" || normalized === "memory") {
-    return normalized;
+function routeFromHash(hash: string): RouteState {
+  const normalized = hash.replace("#", "").split("?")[0];
+  const [key, param] = normalized.split("/");
+  if (key === "journal") {
+    return isIsoDate(param) ? { key, param } : { key };
   }
-  return "map";
+  if (key === "seasons" || key === "memory" || key === "map") {
+    return { key };
+  }
+  return { key: "map" };
 }
 
 function routeLabel(route: RouteKey): string {
   return {
+    journal: "JOURNAL",
     map: "MAP",
     seasons: "SEASONS",
     memory: "MEMORY",
@@ -181,6 +192,7 @@ function routeLabel(route: RouteKey): string {
 
 function routeDescription(route: RouteKey): string {
   return {
+    journal: "Journal reader.",
     map: "Embedding map foundation.",
     seasons: "Calendar and topic timeline foundation.",
     memory: "Resurfacing foundation.",
@@ -189,8 +201,17 @@ function routeDescription(route: RouteKey): string {
 
 function routeTitle(route: RouteKey): string {
   return {
+    journal: "Journal",
     map: "Embedding map",
     seasons: "Emotional seasons",
     memory: "Memory resurfacing",
   }[route];
+}
+
+function isIsoDate(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }

@@ -1,15 +1,19 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import type { PointerEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  clusterPalette,
+  clusterColor,
   moodPalette,
-  topicColor,
+  noiseColor,
+  topicPointColor,
+  topicPointHighlightColor,
   topicMutedColor,
   type Mood,
 } from "../design/palettes";
 import { chromeTextClass, readingTextClass } from "../design/theme";
+import { NoteEditor } from "../journal/NoteEditor";
+import { panBy, zoomAt, type ViewTransform } from "./viewTransform";
 import {
   fetchMap,
   fetchNoteDetails,
@@ -18,6 +22,7 @@ import {
   type MapPoint,
   type NoteDetails,
 } from "../services/map";
+import { Legend, type LegendItem } from "../ui/Legend";
 import { Tag } from "../ui/primitives";
 import { cx } from "../ui/classNames";
 
@@ -31,28 +36,17 @@ type PointStyle = CSSProperties & {
   "--point-color": string;
 };
 
-type LegendStyle = CSSProperties & {
-  "--legend-color": string;
-};
+type Highlight = { mode: ColorMode; key: string };
 
-type LegendItem = {
-  id: string;
-  label: string;
-  color: string;
-  count: number;
-  testId: string;
-};
-
-type ViewTransform = {
-  scale: number;
-  x: number;
-  y: number;
+type LoadNoteOptions = {
+  keepCurrent?: boolean;
 };
 
 type DragState = {
   pointerId: number;
   startClientX: number;
   startClientY: number;
+  startScale: number;
   startX: number;
   startY: number;
 };
@@ -64,14 +58,17 @@ const maxZoom = 6;
 const zoomIntensity = 0.0008;
 const baseGridSize = 96;
 const moodOrder: Mood[] = ["joy", "calm", "sadness", "anger", "fear", "neutral", "mixed"];
+const allTopicsLegendKey = "__all_topics__";
+const unclusteredLegendKey = "__unclustered__";
 
 export function MapView() {
   const [payload, setPayload] = useState<MapPayload | null>(null);
   const [colorMode, setColorMode] = useState<ColorMode>("cluster");
-  const [selectedTopic, setSelectedTopic] = useState<string>("");
+  const [highlight, setHighlight] = useState<Highlight | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<MapPoint | null>(null);
-  const [selectedPointId, setSelectedPointId] = useState<number | null>(null);
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [note, setNote] = useState<NoteDetails | null>(null);
+  const [noteReloading, setNoteReloading] = useState(false);
   const [noteUnavailable, setNoteUnavailable] = useState(false);
   const [viewTransform, setViewTransform] = useState<ViewTransform>(initialViewTransform);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -100,6 +97,7 @@ export function MapView() {
     if (!mapPanel || !payload) {
       return;
     }
+    const panel = mapPanel;
 
     function handleWheel(event: WheelEvent) {
       if (event.cancelable) {
@@ -107,25 +105,62 @@ export function MapView() {
       }
       event.stopPropagation();
 
-      const zoomFactor = Math.exp(-clamp(event.deltaY, -240, 240) * zoomIntensity);
-      setViewTransform((current) => ({
-        ...current,
-        scale: clamp(Number((current.scale * zoomFactor).toFixed(4)), minZoom, maxZoom),
-      }));
+      const rect = panel.getBoundingClientRect();
+      const cursorX = event.clientX - rect.left;
+      const cursorY = event.clientY - rect.top;
+
+      setViewTransform((current) =>
+        zoomAt(current, cursorX, cursorY, event.deltaY, {
+          minZoom,
+          maxZoom,
+          intensity: zoomIntensity,
+        }),
+      );
     }
 
-    mapPanel.addEventListener("wheel", handleWheel, { passive: false });
-    return () => mapPanel.removeEventListener("wheel", handleWheel);
+    panel.addEventListener("wheel", handleWheel, { passive: false });
+    return () => panel.removeEventListener("wheel", handleWheel);
   }, [payload]);
 
   async function selectPoint(point: MapPoint) {
     setSelectedPointId(point.id);
-    setNote(null);
+    await loadNote(point.id);
+  }
+
+  async function reloadSelectedNote() {
+    if (selectedPointId !== null) {
+      const reloadedNote = await loadNote(selectedPointId, { keepCurrent: true });
+      return reloadedNote
+        ? {
+            rawText: reloadedNote.raw_text,
+            rawTextSha256: reloadedNote.raw_text_sha256,
+          }
+        : null;
+    }
+    return null;
+  }
+
+  async function loadNote(id: string, options: LoadNoteOptions = {}): Promise<NoteDetails | null> {
+    const keepCurrent = options.keepCurrent === true;
+    if (keepCurrent) {
+      setNoteReloading(true);
+    } else {
+      setNoteReloading(false);
+      setNote(null);
+    }
     setNoteUnavailable(false);
     try {
-      setNote(await fetchNoteDetails(point.id));
+      const nextNote = await fetchNoteDetails(id);
+      setNote(nextNote);
+      return nextNote;
     } catch {
       setNoteUnavailable(true);
+      if (keepCurrent) {
+        throw new Error("NOTE RELOAD FAILED");
+      }
+      return null;
+    } finally {
+      setNoteReloading(false);
     }
   }
 
@@ -140,6 +175,7 @@ export function MapView() {
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
+      startScale: viewTransform.scale,
       startX: viewTransform.x,
       startY: viewTransform.y,
     });
@@ -150,11 +186,13 @@ export function MapView() {
       return;
     }
 
-    setViewTransform((current) => ({
-      ...current,
-      x: dragState.startX + event.clientX - dragState.startClientX,
-      y: dragState.startY + event.clientY - dragState.startClientY,
-    }));
+    setViewTransform(() =>
+      panBy(
+        { scale: dragState.startScale, x: dragState.startX, y: dragState.startY },
+        event.clientX - dragState.startClientX,
+        event.clientY - dragState.startClientY,
+      ),
+    );
   }
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
@@ -174,18 +212,18 @@ export function MapView() {
         colorMode={colorMode}
         onColorModeChange={(mode) => {
           setColorMode(mode);
-          if (mode !== "topic") {
-            setSelectedTopic("");
-          }
+          setHighlight(null);
         }}
         onResetView={() => setViewTransform(initialViewTransform)}
       />
 
       <MapLegend
+        clusters={payload.clusters}
         colorMode={colorMode}
-        onTopicSelect={setSelectedTopic}
+        highlight={highlight}
+        nNoise={payload.n_noise}
+        onHighlightToggle={toggleHighlight}
         points={payload.points}
-        selectedTopic={selectedTopic}
       />
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -217,16 +255,16 @@ export function MapView() {
                   transformOrigin: "0px 0px",
                 }}
               >
-                <ClusterLayer clusters={payload.clusters} points={payload.points} />
+                <ClusterLayer clusters={payload.clusters} highlight={highlight} points={payload.points} />
                 {payload.points.map((point) => (
                   <PointButton
                     colorMode={colorMode}
+                    highlight={highlight}
                     key={point.id}
                     onHover={setHoveredPoint}
                     onSelect={selectPoint}
                     point={point}
                     selected={selectedPointId === point.id}
-                    selectedTopic={selectedTopic}
                   />
                 ))}
               </div>
@@ -246,10 +284,25 @@ export function MapView() {
           ) : null}
         </section>
 
-        <NotePanel note={note} noteUnavailable={noteUnavailable} selectedPointId={selectedPointId} />
+        <NotePanel
+          note={note}
+          noteUnavailable={noteUnavailable}
+          noteReloading={noteReloading}
+          onReload={reloadSelectedNote}
+          selectedPointId={selectedPointId}
+        />
       </div>
     </div>
   );
+
+  function toggleHighlight(mode: ColorMode, key: string) {
+    if (mode === "topic" && key === allTopicsLegendKey) {
+      setHighlight(null);
+      return;
+    }
+
+    setHighlight((current) => (current?.mode === mode && current.key === key ? null : { mode, key }));
+  }
 }
 
 function MapControls({
@@ -291,106 +344,38 @@ function MapControls({
 }
 
 function MapLegend({
+  clusters,
   colorMode,
-  onTopicSelect,
+  highlight,
+  nNoise,
+  onHighlightToggle,
   points,
-  selectedTopic,
 }: {
+  clusters: MapCluster[];
   colorMode: ColorMode;
-  onTopicSelect: (topic: string) => void;
+  highlight: Highlight | null;
+  nNoise: number;
+  onHighlightToggle: (mode: ColorMode, key: string) => void;
   points: MapPoint[];
-  selectedTopic: string;
 }) {
-  if (points.length === 0 || colorMode === "cluster") {
+  if (points.length === 0) {
     return null;
   }
 
-  if (colorMode === "mood") {
-    const items = moodLegendItems(points);
-
-    return (
-      <LegendFrame label="MOOD COLOR LEGEND">
-        {items.map((item) => (
-          <span
-            className={cx(
-              chromeTextClass,
-              "inline-flex h-8 items-center gap-2 rounded-[2px] border border-hairline bg-cream-paper px-2 text-[10px] text-ink-black",
-            )}
-            key={item.id}
-          >
-            <LegendSwatch item={item} />
-            <span>{item.label}</span>
-            <span className="text-slate">{item.count}</span>
-          </span>
-        ))}
-      </LegendFrame>
-    );
-  }
-
-  const topicItems = topicLegendItems(points);
-  if (topicItems.length === 0) {
-    return null;
-  }
+  const items = legendItemsForMode(colorMode, points, clusters, nNoise);
+  const activeKey =
+    colorMode === "topic" && highlight?.mode !== "topic"
+      ? allTopicsLegendKey
+      : highlight?.mode === colorMode
+        ? highlight.key
+        : null;
 
   return (
-    <LegendFrame label="TOPIC COLOR LEGEND">
-      <button
-        aria-pressed={selectedTopic === ""}
-        className={cx(
-          chromeTextClass,
-          "inline-flex h-8 items-center rounded-[2px] border px-2 text-[10px]",
-          selectedTopic === "" ? "border-schematic-blue text-ink-black" : "border-hairline text-slate",
-        )}
-        onClick={() => onTopicSelect("")}
-        type="button"
-      >
-        ALL TOPICS
-      </button>
-      {topicItems.map((item) => (
-        <button
-          aria-label={item.label}
-          aria-pressed={selectedTopic === item.id}
-          className={cx(
-            chromeTextClass,
-            "inline-flex h-8 max-w-full items-center gap-2 rounded-[2px] border bg-cream-paper px-2 text-[10px]",
-            selectedTopic === item.id ? "border-schematic-blue text-ink-black" : "border-hairline text-slate",
-          )}
-          key={item.id}
-          onClick={() => onTopicSelect(item.id)}
-          type="button"
-        >
-          <LegendSwatch item={item} />
-          <span>{item.label}</span>
-          <span aria-hidden="true" className="text-slate">
-            {item.count}
-          </span>
-        </button>
-      ))}
-    </LegendFrame>
-  );
-}
-
-function LegendFrame({ children, label }: { children: ReactNode; label: string }) {
-  return (
-    <div aria-label={label} className="grid gap-2" role="group">
-      <span className={cx(chromeTextClass, "text-[10px] text-slate")}>LEGEND</span>
-      <div className="flex flex-wrap gap-2">{children}</div>
-    </div>
-  );
-}
-
-function LegendSwatch({ item }: { item: LegendItem }) {
-  const style: LegendStyle = {
-    "--legend-color": item.color,
-    backgroundColor: "var(--legend-color)",
-  };
-
-  return (
-    <span
-      aria-hidden="true"
-      className="h-3 w-3 shrink-0 rounded-[2px] border border-hairline"
-      data-testid={item.testId}
-      style={style}
+    <Legend
+      activeKey={activeKey}
+      ariaLabel={`${colorMode.toUpperCase()} LEGEND`}
+      items={items}
+      onToggle={(key) => onHighlightToggle(colorMode, key)}
     />
   );
 }
@@ -416,18 +401,24 @@ function GridLayer({ viewTransform }: { viewTransform: ViewTransform }) {
 
 function ClusterLayer({
   clusters,
+  highlight,
   points,
 }: {
   clusters: MapCluster[];
+  highlight: Highlight | null;
   points: MapPoint[];
 }) {
+  const activeClusterKey = highlight?.mode === "cluster" ? highlight.key : null;
+
   return (
     <svg aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full">
       {clusters.map((cluster) => {
         const clusterPoints = points.filter((point) => point.cluster_id === cluster.id);
         const box = clusterBox(clusterPoints);
+        const dimmed = activeClusterKey !== null && activeClusterKey !== String(cluster.id);
+
         return (
-          <g key={cluster.id}>
+          <g key={cluster.id} opacity={dimmed ? 0.28 : 1}>
             <rect
               data-testid={`cluster-hull-${cluster.id}`}
               fill="none"
@@ -457,20 +448,20 @@ function ClusterLayer({
 
 function PointButton({
   colorMode,
+  highlight,
   onHover,
   onSelect,
   point,
   selected,
-  selectedTopic,
 }: {
   colorMode: ColorMode;
+  highlight: Highlight | null;
   onHover: (point: MapPoint | null) => void;
   onSelect: (point: MapPoint) => void;
   point: MapPoint;
   selected: boolean;
-  selectedTopic: string;
 }) {
-  const color = pointColor(point, colorMode, selectedTopic);
+  const color = pointColor(point, colorMode, highlight);
   const style: PointStyle = {
     "--point-color": color,
     backgroundColor: "var(--point-color)",
@@ -500,11 +491,15 @@ function PointButton({
 function NotePanel({
   note,
   noteUnavailable,
+  noteReloading,
+  onReload,
   selectedPointId,
 }: {
   note: NoteDetails | null;
   noteUnavailable: boolean;
-  selectedPointId: number | null;
+  noteReloading: boolean;
+  onReload: () => Promise<{ rawText: string; rawTextSha256: string } | null>;
+  selectedPointId: string | null;
 }) {
   if (selectedPointId === null) {
     return (
@@ -538,19 +533,34 @@ function NotePanel({
     );
   }
 
+  const daySummary = note.day_summary?.trim();
+
   return (
     <aside
+      aria-busy={noteReloading}
       aria-label={`NOTE ${note.id} DETAILS`}
       className={cx(notePanelFrameClass, "grid content-start gap-4 p-5")}
       role="complementary"
     >
       <div className="flex items-center justify-between gap-3">
         <Tag>{note.mood.toUpperCase()}</Tag>
-        <a className={cx(chromeTextClass, "text-[10px] text-schematic-blue")} href={`#seasons?date=${note.date}`}>
-          {note.date}
+        <a className={cx(chromeTextClass, "text-[10px] text-schematic-blue")} href={`#journal/${note.date}`}>
+          {note.date} · OPEN DAY
         </a>
       </div>
       <p className={cx(readingTextClass, "whitespace-pre-wrap text-[15px] leading-7")}>{note.raw_text}</p>
+      <NoteEditor
+        noteId={String(note.id)}
+        onReload={onReload}
+        rawText={note.raw_text}
+        rawTextSha256={note.raw_text_sha256}
+      />
+      {daySummary ? (
+        <div className="grid gap-2">
+          <span className={cx(chromeTextClass, "text-[10px] text-slate")}>DAY SUMMARY</span>
+          <p className={cx(readingTextClass, "text-sm leading-6 text-slate")}>{daySummary}</p>
+        </div>
+      ) : null}
       <div className="grid gap-2">
         <span className={cx(chromeTextClass, "text-[10px] text-slate")}>MOOD EVIDENCE</span>
         <p className={cx(readingTextClass, "text-sm leading-6 text-slate")}>{note.mood_evidence}</p>
@@ -567,21 +577,76 @@ function NotePanel({
   );
 }
 
-function pointColor(point: MapPoint, colorMode: ColorMode, selectedTopic: string): string {
+function pointColor(point: MapPoint, colorMode: ColorMode, highlight: Highlight | null): string {
   if (colorMode === "mood") {
-    return moodPalette[point.mood];
+    const color = moodPalette[point.mood];
+    const activeMood = activeHighlight(highlight, "mood");
+    return !activeMood || activeMood.key === point.mood ? color : topicMutedColor;
   }
+
   if (colorMode === "topic") {
-    if (selectedTopic) {
-      return point.topics.includes(selectedTopic) ? topicColor(selectedTopic) : topicMutedColor;
-    }
-    return point.topics[0] ? topicColor(point.topics[0]) : topicMutedColor;
+    const activeTopic = activeHighlight(highlight, "topic");
+    return !activeTopic ? topicPointColor : point.topics.includes(activeTopic.key) ? topicPointHighlightColor : topicMutedColor;
   }
-  return clusterColor(point.cluster_id);
+
+  const activeCluster = activeHighlight(highlight, "cluster");
+  if (point.cluster_id === -1) {
+    return !activeCluster || activeCluster.key === unclusteredLegendKey ? noiseColor : topicMutedColor;
+  }
+
+  const color = clusterColor(point.cluster_id);
+  return !activeCluster || clusterHighlightMatches(point, activeCluster.key) ? color : topicMutedColor;
 }
 
-function clusterColor(clusterId: number): string {
-  return clusterPalette[Math.abs(clusterId) % clusterPalette.length];
+function activeHighlight(highlight: Highlight | null, mode: ColorMode): Highlight | null {
+  return highlight?.mode === mode ? highlight : null;
+}
+
+function clusterHighlightMatches(point: MapPoint, key: string): boolean {
+  if (key === unclusteredLegendKey) {
+    return point.cluster_id === -1;
+  }
+
+  return String(point.cluster_id) === key;
+}
+
+function legendItemsForMode(
+  colorMode: ColorMode,
+  points: MapPoint[],
+  clusters: MapCluster[],
+  nNoise: number,
+): LegendItem[] {
+  if (colorMode === "cluster") {
+    return clusterLegendItems(clusters, nNoise);
+  }
+
+  if (colorMode === "mood") {
+    return moodLegendItems(points);
+  }
+
+  return topicLegendItems(points);
+}
+
+function clusterLegendItems(clusters: MapCluster[], nNoise: number): LegendItem[] {
+  const items = clusters.map((cluster) => ({
+    key: String(cluster.id),
+    label: formatLegendLabel(cluster.label),
+    count: cluster.size,
+    swatch: clusterColor(cluster.id),
+    swatchTestId: legendTestId("cluster", String(cluster.id)),
+  }));
+
+  if (nNoise > 0) {
+    items.push({
+      key: unclusteredLegendKey,
+      label: "UNCLUSTERED",
+      count: nNoise,
+      swatch: noiseColor,
+      swatchTestId: legendTestId("cluster", "unclustered"),
+    });
+  }
+
+  return items;
 }
 
 function moodLegendItems(points: MapPoint[]): LegendItem[] {
@@ -593,11 +658,11 @@ function moodLegendItems(points: MapPoint[]): LegendItem[] {
   return moodOrder
     .filter((mood) => counts.has(mood))
     .map((mood) => ({
-      id: mood,
+      key: mood,
       label: formatLegendLabel(mood),
-      color: moodPalette[mood],
       count: counts.get(mood) ?? 0,
-      testId: legendTestId("mood", mood),
+      swatch: moodPalette[mood],
+      swatchTestId: legendTestId("mood", mood),
     }));
 }
 
@@ -609,22 +674,22 @@ function topicLegendItems(points: MapPoint[]): LegendItem[] {
     });
   });
 
-  return [...counts.entries()]
+  const items = [...counts.entries()]
     .sort(([topicA, countA], [topicB, countB]) => countB - countA || topicA.localeCompare(topicB))
     .map(([topic, count]) => ({
-      id: topic,
+      key: topic,
       label: formatLegendLabel(topic),
-      color: topicColor(topic),
       count,
-      testId: legendTestId("topic", topic),
     }));
+
+  return [{ key: allTopicsLegendKey, label: "ALL TOPICS" }, ...items];
 }
 
 function formatLegendLabel(value: string): string {
   return value.replace(/_/g, " ").toUpperCase();
 }
 
-function legendTestId(kind: "mood" | "topic", value: string): string {
+function legendTestId(kind: "cluster" | "mood", value: string): string {
   return `legend-swatch-${kind}-${value.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase()}`;
 }
 
@@ -653,6 +718,7 @@ function emptyMapPayload(): MapPayload {
   return {
     signature: "empty",
     computed_at: "",
+    n_noise: 0,
     points: [],
     clusters: [],
   };
@@ -667,6 +733,7 @@ function normalizeMapPayload(payload: MapPayload): MapPayload {
 
   return {
     ...payload,
+    n_noise: Number.isFinite(payload.n_noise) ? Math.max(0, payload.n_noise) : 0,
     points: fitPointsToUnitViewport(finitePoints),
   };
 }
@@ -698,10 +765,6 @@ function normalizeCoordinate(value: number, min: number, span: number): number {
   }
 
   return coordinatePadding + ((value - min) / span) * (1 - coordinatePadding * 2);
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 function formatPx(value: number): string {

@@ -63,14 +63,38 @@ describe("Phase 2 app shell and auth flow", () => {
     );
   });
 
-  it("AC-2: routes between MAP, SEASONS, and MEMORY placeholders in the authenticated shell", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      jsonResponse({ username: "artem" }),
-    );
+  it("AC-2: routes between JOURNAL, MAP, SEASONS, and MEMORY views in the authenticated shell", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+
+      if (url.endsWith("/api/auth/me")) {
+        return jsonResponse({ username: "artem" });
+      }
+      if (url.endsWith("/api/map")) {
+        return jsonResponse({ signature: "empty", computed_at: "", n_noise: 0, points: [], clusters: [] });
+      }
+      if (url.endsWith("/api/days/latest")) {
+        return jsonResponse({
+          date: "2026-02-14",
+          prev_date: null,
+          next_date: null,
+          day: null,
+          notes: [],
+        });
+      }
+      if (url.includes("/api/days?month=2026-02")) {
+        return jsonResponse({ days: [{ date: "2026-02-14", note_count: 0, mood: null }] });
+      }
+
+      return jsonResponse({ detail: `Unexpected request: ${url}` }, 500);
+    });
 
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "MAP" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "JOURNAL" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: "JOURNAL" }));
+    expect(await screen.findByRole("heading", { name: "JOURNAL" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("link", { name: "SEASONS" }));
     expect(screen.getByRole("heading", { name: "SEASONS" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("link", { name: "MEMORY" }));

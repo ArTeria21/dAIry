@@ -65,6 +65,9 @@ export function MemoryView() {
           ANOTHER
         </Button>
       </div>
+      <a className={cx(chromeTextClass, "text-[10px] text-schematic-blue")} href={`#journal/${day.date}`}>
+        READ THIS DAY
+      </a>
     </article>
   );
 }

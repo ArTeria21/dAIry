@@ -1,5 +1,5 @@
 export type MapPoint = {
-  id: number;
+  id: string;
   x: number;
   y: number;
   cluster_id: number;
@@ -20,12 +20,13 @@ export type MapCluster = {
 export type MapPayload = {
   signature: string;
   computed_at: string;
+  n_noise: number;
   points: MapPoint[];
   clusters: MapCluster[];
 };
 
 export type NoteDetails = {
-  id: number;
+  id: string;
   date: string;
   ts: string;
   mood: MapPoint["mood"];
@@ -34,7 +35,8 @@ export type NoteDetails = {
   topics: string[];
   gist: string;
   raw_text: string;
-  day_summary: string;
+  raw_text_sha256: string;
+  day_summary: string | null;
   note_path: string;
 };
 
@@ -48,8 +50,8 @@ export async function fetchMap(): Promise<MapPayload> {
   return response.json() as Promise<MapPayload>;
 }
 
-export async function fetchNoteDetails(id: number): Promise<NoteDetails> {
-  const response = await fetch(`/api/notes/${id}`, {
+export async function fetchNoteDetails(id: string): Promise<NoteDetails> {
+  const response = await fetch(`/api/notes/${encodeURIComponent(id)}`, {
     credentials: "include",
   });
   if (!response.ok) {

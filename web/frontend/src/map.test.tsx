@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import {
-  clusterPalette,
+  clusterColor,
   moodPalette,
-  topicColor,
+  noiseColor,
+  topicPointColor,
+  topicPointHighlightColor,
   topicMutedColor,
 } from "./design/palettes";
 
@@ -20,9 +22,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 const mapPayload = {
   signature: "notes:2:max:2",
   computed_at: "2026-06-17T08:00:00Z",
+  n_noise: 0,
   points: [
     {
-      id: 1,
+      id: "1",
       x: 0.2,
       y: 0.7,
       cluster_id: 0,
@@ -33,7 +36,7 @@ const mapPayload = {
       ts: "2026-02-13T09:42:00Z",
     },
     {
-      id: 2,
+      id: "2",
       x: 0.8,
       y: 0.3,
       cluster_id: 1,
@@ -51,7 +54,7 @@ const mapPayload = {
 };
 
 const notePayload = {
-  id: 1,
+  id: "1",
   date: "2026-02-13",
   ts: "2026-02-13T09:42:00Z",
   mood: "calm",
@@ -60,6 +63,7 @@ const notePayload = {
   topics: ["work", "focus"],
   gist: "Built a map prototype.",
   raw_text: "Today I built the first map prototype from my journal embeddings.",
+  raw_text_sha256: "note-sha",
   day_summary: "A focused day of prototyping.",
   note_path: "2026/02/2026-02-13.md",
 };
@@ -100,6 +104,45 @@ function installFetchMock({
   });
 }
 
+function installMapEditFetchMock({
+  map = mapPayload,
+  noteId = "1",
+  initialNote = notePayload,
+  putStatus = 200,
+  reloadedNote = notePayload,
+}: {
+  map?: unknown;
+  noteId?: string;
+  initialNote?: unknown;
+  putStatus?: number;
+  reloadedNote?: unknown;
+} = {}) {
+  let noteGetCount = 0;
+  const noteUrl = `/api/notes/${encodeURIComponent(noteId)}`;
+
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = input instanceof Request ? input : null;
+    const url = typeof input === "string" ? input : request ? request.url : input.toString();
+    const method = init?.method ?? request?.method ?? "GET";
+
+    if (url.endsWith("/api/auth/me")) {
+      return jsonResponse({ username: "artem" });
+    }
+    if (url.endsWith("/api/map")) {
+      return jsonResponse(map);
+    }
+    if (url.endsWith(noteUrl) && method === "GET") {
+      noteGetCount += 1;
+      return jsonResponse(noteGetCount === 1 ? initialNote : reloadedNote);
+    }
+    if (url.endsWith(noteUrl) && method === "PUT") {
+      return jsonResponse({ id: noteId, new_sha256: "edited-note-sha" }, putStatus);
+    }
+
+    return jsonResponse({ detail: `Unexpected request: ${url}` }, 500);
+  });
+}
+
 async function renderAuthenticatedMap() {
   window.location.hash = "#map";
   render(<App />);
@@ -123,7 +166,7 @@ function installMapViewportRect() {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function getBoundingClientRect(
     this: HTMLElement,
   ) {
-    if (this.dataset.testid === "map-viewport") {
+    if (this.dataset.testid === "map-panel" || this.dataset.testid === "map-viewport") {
       return mapViewportRect;
     }
 
@@ -131,7 +174,9 @@ function installMapViewportRect() {
   });
 }
 
-function mapWithPoints(points: Array<Partial<(typeof mapPayload.points)[number]> & { id: number; x: number; y: number }>) {
+function mapWithPoints(
+  points: Array<Partial<Omit<(typeof mapPayload.points)[number], "id">> & { id: string | number; x: number; y: number }>,
+) {
   return {
     ...mapPayload,
     signature: `notes:${points.length}:wide`,
@@ -143,6 +188,7 @@ function mapWithPoints(points: Array<Partial<(typeof mapPayload.points)[number]>
       date: "2026-02-13",
       ts: "2026-02-13T09:42:00Z",
       ...point,
+      id: String(point.id),
     })),
     clusters: [{ id: 0, label: "work", size: points.length, dominant_topics: ["work"] }],
   };
@@ -186,6 +232,23 @@ function readViewportTransform(viewport: HTMLElement) {
   };
 }
 
+function expectedZoomAt(
+  current: ReturnType<typeof readViewportTransform>,
+  cursorX: number,
+  cursorY: number,
+  deltaY: number,
+) {
+  const clampedDelta = Math.min(240, Math.max(-240, deltaY));
+  const nextScale = Math.min(6, Math.max(0.5, current.scale * Math.exp(-clampedDelta * 0.0008)));
+  const k = nextScale / current.scale;
+
+  return {
+    scale: nextScale,
+    x: cursorX - (cursorX - current.x) * k,
+    y: cursorY - (cursorY - current.y) * k,
+  };
+}
+
 function formatPx(value: number) {
   return `${Number(value.toFixed(2))}px`;
 }
@@ -213,8 +276,103 @@ describe("Phase 3 map view", () => {
       "aria-pressed",
       "true",
     );
-    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterPalette[0]);
-    expect(point2.style.getPropertyValue("--point-color")).toBe(clusterPalette[1]);
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("min-h-[74px]");
+    expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "HOME" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "UNCLUSTERED" })).not.toBeInTheDocument();
+    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterColor(0));
+    expect(point2.style.getPropertyValue("--point-color")).toBe(clusterColor(1));
+  });
+
+  it("clicking CLUSTER legend chips highlights the selected cluster and toggles back", async () => {
+    installFetchMock();
+
+    await renderAuthenticatedMap();
+
+    const point1 = await screen.findByRole("button", { name: "NOTE 1" });
+    const point2 = screen.getByRole("button", { name: "NOTE 2" });
+
+    await userEvent.click(screen.getByRole("button", { name: "WORK" }));
+
+    expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "true");
+    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterColor(0));
+    expect(point2.style.getPropertyValue("--point-color")).toBe(topicMutedColor);
+    expect(screen.getByTestId("cluster-hull-0").parentElement).toHaveAttribute("opacity", "1");
+    expect(screen.getByTestId("cluster-hull-1").parentElement).toHaveAttribute("opacity", "0.28");
+
+    await userEvent.click(screen.getByRole("button", { name: "WORK" }));
+
+    expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "false");
+    expect(point2.style.getPropertyValue("--point-color")).toBe(clusterColor(1));
+    expect(screen.getByTestId("cluster-hull-1").parentElement).toHaveAttribute("opacity", "1");
+  });
+
+  it("renders unclustered noise as neutral gray with an UNCLUSTERED legend chip", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 1,
+        points: [
+          ...mapPayload.points,
+          {
+            id: 3,
+            x: 0.5,
+            y: 0.5,
+            cluster_id: -1,
+            mood: "neutral",
+            topics: ["loose"],
+            gist: "Did not fit a cluster.",
+            date: "2026-02-15",
+            ts: "2026-02-15T10:00:00Z",
+          },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+
+    const noisePoint = await screen.findByRole("button", { name: "NOTE 3" });
+    expect(screen.getByRole("button", { name: "UNCLUSTERED" })).toBeInTheDocument();
+    expect(screen.getByTestId("legend-swatch-cluster-unclustered").style.getPropertyValue("--legend-color")).toBe(
+      noiseColor,
+    );
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(noiseColor);
+
+    await userEvent.click(screen.getByRole("button", { name: "HOME" }));
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicMutedColor);
+  });
+
+  it("renders only the UNCLUSTERED legend chip when every point is noise", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 2,
+        points: [
+          { ...mapPayload.points[0], cluster_id: -1 },
+          { ...mapPayload.points[1], cluster_id: -1 },
+        ],
+        clusters: [],
+      },
+    });
+
+    await renderAuthenticatedMap();
+
+    expect(await screen.findByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "UNCLUSTERED" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "WORK" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(noiseColor);
+    expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(noiseColor);
+  });
+
+  it("treats legacy map payloads without n_noise as zero noise", async () => {
+    const { n_noise: _nNoise, ...legacyPayload } = mapPayload;
+    installFetchMock({ map: legacyPayload });
+
+    await renderAuthenticatedMap();
+
+    expect(await screen.findByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "UNCLUSTERED" })).not.toBeInTheDocument();
   });
 
   it("renders thin Schematic Blue cluster hulls and uppercase mono labels", async () => {
@@ -224,8 +382,10 @@ describe("Phase 3 map view", () => {
 
     expect(await screen.findByTestId("cluster-hull-0")).toHaveAttribute("stroke", "#0d6ea5");
     expect(screen.getByTestId("cluster-hull-1")).toHaveAttribute("stroke", "#0d6ea5");
-    expect(screen.getByText("WORK")).toHaveClass("font-plexmono");
-    expect(screen.getByText("HOME")).toHaveClass("font-plexmono");
+    expect(screen.getByTestId("cluster-hull-0").nextElementSibling).toHaveTextContent("WORK");
+    expect(screen.getByTestId("cluster-hull-0").nextElementSibling).toHaveClass("font-plexmono");
+    expect(screen.getByTestId("cluster-hull-1").nextElementSibling).toHaveTextContent("HOME");
+    expect(screen.getByTestId("cluster-hull-1").nextElementSibling).toHaveClass("font-plexmono");
   });
 
   it("selecting MOOD recolors points with the shared mood palette", async () => {
@@ -234,37 +394,145 @@ describe("Phase 3 map view", () => {
     await renderAuthenticatedMap();
     await userEvent.click(await screen.findByRole("button", { name: "MOOD" }));
 
+    expect(screen.getByLabelText("MOOD LEGEND")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
       moodPalette.calm,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       moodPalette.joy,
     );
+
+    await userEvent.click(screen.getByRole("button", { name: "CALM" }));
+    expect(screen.getByRole("button", { name: "CALM" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
+      moodPalette.calm,
+    );
+    expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
+      topicMutedColor,
+    );
   });
 
-  it("selecting TOPIC uses stable topic colors and fades nonmatching points when filtered", async () => {
+  it("MOOD mode colors and filters noise points by their mood", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 1,
+        points: [
+          ...mapPayload.points,
+          {
+            id: 3,
+            x: 0.5,
+            y: 0.5,
+            cluster_id: -1,
+            mood: "calm",
+            topics: ["loose"],
+            gist: "Noise point with a calm mood.",
+            date: "2026-02-15",
+            ts: "2026-02-15T10:00:00Z",
+          },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "MOOD" }));
+    const noisePoint = screen.getByRole("button", { name: "NOTE 3" });
+
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(moodPalette.calm);
+
+    await userEvent.click(screen.getByRole("button", { name: "JOY" }));
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicMutedColor);
+
+    await userEvent.click(screen.getByRole("button", { name: "JOY" }));
+    await userEvent.click(screen.getByRole("button", { name: "CALM" }));
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(moodPalette.calm);
+  });
+
+  it("switching color modes resets highlight without changing the legend frame height", async () => {
+    installFetchMock();
+
+    await renderAuthenticatedMap();
+
+    await userEvent.click(await screen.findByRole("button", { name: "WORK" }));
+    expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
+      topicMutedColor,
+    );
+    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("min-h-[74px]");
+
+    await userEvent.click(screen.getByRole("button", { name: "MOOD" }));
+
+    expect(screen.getByLabelText("MOOD LEGEND")).toHaveClass("min-h-[74px]");
+    expect(screen.getByRole("button", { name: "CALM" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
+      moodPalette.joy,
+    );
+  });
+
+  it("selecting TOPIC uses neutral point colors and fades nonmatching points when filtered", async () => {
     installFetchMock();
 
     await renderAuthenticatedMap();
     await userEvent.click(await screen.findByRole("button", { name: "TOPIC" }));
 
-    expect(screen.getByLabelText("TOPIC COLOR LEGEND")).toBeInTheDocument();
-    expect(screen.getByTestId("legend-swatch-topic-work").style.getPropertyValue("--legend-color")).toBe(
-      topicColor("work"),
-    );
+    expect(screen.getByLabelText("TOPIC LEGEND")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ALL TOPICS" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
-      topicColor("work"),
+      topicPointColor,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
-      topicColor("home"),
+      topicPointColor,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "WORK" }));
 
+    expect(screen.getByRole("button", { name: "ALL TOPICS" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
-      topicColor("work"),
+      topicPointHighlightColor,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
+      topicMutedColor,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "WORK" }));
+
+    expect(screen.getByRole("button", { name: "ALL TOPICS" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
+      topicPointColor,
+    );
+  });
+
+  it("TOPIC mode includes noise points in topic filtering", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 1,
+        points: [
+          ...mapPayload.points,
+          {
+            id: 3,
+            x: 0.5,
+            y: 0.5,
+            cluster_id: -1,
+            mood: "calm",
+            topics: ["loose"],
+            gist: "Noise point with its own topic.",
+            date: "2026-02-15",
+            ts: "2026-02-15T10:00:00Z",
+          },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "TOPIC" }));
+    const noisePoint = screen.getByRole("button", { name: "NOTE 3" });
+
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicPointColor);
+
+    await userEvent.click(screen.getByRole("button", { name: "LOOSE" }));
+    expect(noisePoint.style.getPropertyValue("--point-color")).toBe(topicPointHighlightColor);
+    expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
       topicMutedColor,
     );
   });
@@ -283,17 +551,152 @@ describe("Phase 3 map view", () => {
     const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/notes/1", expect.objectContaining({ credentials: "include" }));
-    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterPalette[0]);
+    expect(point1.style.getPropertyValue("--point-color")).toBe(clusterColor(0));
     expect(point1).toHaveClass("outline-ink-black");
     expect(within(panel).getByText("Today I built the first map prototype from my journal embeddings.")).toHaveClass(
       "font-gerstnerprogramm",
     );
+    expect(within(panel).getByText("DAY SUMMARY")).toHaveClass("font-ftsystemmono");
+    expect(within(panel).getByText("A focused day of prototyping.")).toHaveClass("font-gerstnerprogramm");
     expect(within(panel).getByText("CALM")).toBeInTheDocument();
     expect(within(panel).getByText("The note is reflective and steady.")).toBeInTheDocument();
     expect(within(panel).getByText("WORK")).toBeInTheDocument();
     expect(within(panel).getByText("FOCUS")).toBeInTheDocument();
     expect(within(panel).getByText("0.82")).toBeInTheDocument();
-    expect(within(panel).getByRole("link", { name: "2026-02-13" })).toBeInTheDocument();
+    const openDay = within(panel).getByRole("link", { name: "2026-02-13 · OPEN DAY" });
+    expect(openDay).toHaveAttribute("href", "#journal/2026-02-13");
+  });
+
+  it("opens and saves map notes with duplicate timestamp string ids using encoded URLs", async () => {
+    const duplicateId = "2026-06-08T21:23#2";
+    const encodedNoteUrl = `/api/notes/${encodeURIComponent(duplicateId)}`;
+    const duplicateNote = {
+      ...notePayload,
+      id: duplicateId,
+      date: "2026-06-08",
+      ts: "2026-06-08T21:23:00Z",
+      gist: "Second duplicate point.",
+      raw_text: "Second duplicate map note.",
+      raw_text_sha256: "second-duplicate-sha",
+    };
+    const fetchMock = installMapEditFetchMock({
+      map: {
+        ...mapPayload,
+        points: [
+          {
+            ...mapPayload.points[0],
+            id: duplicateId,
+            date: "2026-06-08",
+            ts: "2026-06-08T21:23:00Z",
+            gist: "Second duplicate point.",
+          },
+        ],
+        clusters: [{ id: 0, label: "work", size: 1, dominant_topics: ["work", "focus"] }],
+      },
+      noteId: duplicateId,
+      initialNote: duplicateNote,
+      reloadedNote: {
+        ...duplicateNote,
+        raw_text: "Second duplicate edited from map.",
+        raw_text_sha256: "second-duplicate-edited-sha",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: `NOTE ${duplicateId}` }));
+    const panel = await screen.findByRole("complementary", { name: `NOTE ${duplicateId} DETAILS` });
+
+    expect(fetchMock).toHaveBeenCalledWith(encodedNoteUrl, expect.objectContaining({ credentials: "include" }));
+    expect(within(panel).getByText("Second duplicate map note.")).toBeInTheDocument();
+
+    await userEvent.click(within(panel).getByRole("button", { name: "EDIT" }));
+    const textarea = within(panel).getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "Second duplicate edited from map.");
+    await userEvent.click(within(panel).getByRole("button", { name: "SAVE" }));
+
+    expect(await within(panel).findByText("Second duplicate edited from map.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(panel).queryByText("SAVED · ENRICHMENT WILL UPDATE LATER")).not.toBeInTheDocument();
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      encodedNoteUrl,
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        body: JSON.stringify({
+          new_text: "Second duplicate edited from map.",
+          expected_sha256: "second-duplicate-sha",
+        }),
+      }),
+    );
+  });
+
+  it("hides the day summary block when the note has no summary", async () => {
+    installFetchMock({
+      note: {
+        ...notePayload,
+        day_summary: "",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    expect(within(panel).queryByText("DAY SUMMARY")).not.toBeInTheDocument();
+  });
+
+  it("409 from NotePanel save keeps the attempted edit visible after reloading server text", async () => {
+    installMapEditFetchMock({
+      putStatus: 409,
+      reloadedNote: {
+        ...notePayload,
+        raw_text: "Server changed this note before the map save completed.",
+        raw_text_sha256: "server-changed-sha",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    await userEvent.click(within(panel).getByRole("button", { name: "EDIT" }));
+    const textarea = within(panel).getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "My unsaved map-panel version.");
+
+    await userEvent.click(within(panel).getByRole("button", { name: "SAVE" }));
+
+    expect(await within(panel).findByText("NOTE CHANGED ELSEWHERE — RELOADED")).toBeInTheDocument();
+    expect(within(panel).getByRole("textbox")).toHaveValue("Server changed this note before the map save completed.");
+    expect(within(panel).getByText("YOUR UNSAVED VERSION")).toBeInTheDocument();
+    expect(within(panel).getByText("My unsaved map-panel version.")).toBeInTheDocument();
+  });
+
+  it("successful NotePanel save reloads fresh text without leaving a stale saved status", async () => {
+    installMapEditFetchMock({
+      reloadedNote: {
+        ...notePayload,
+        raw_text: "Saved from the map note panel.",
+        raw_text_sha256: "saved-map-sha",
+      },
+    });
+
+    await renderAuthenticatedMap();
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
+    const panel = await screen.findByRole("complementary", { name: "NOTE 1 DETAILS" });
+    await userEvent.click(within(panel).getByRole("button", { name: "EDIT" }));
+    const textarea = within(panel).getByRole("textbox");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "Saved from the map note panel.");
+
+    await userEvent.click(within(panel).getByRole("button", { name: "SAVE" }));
+
+    expect(await within(panel).findByText("Saved from the map note panel.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(panel).queryByText("SAVED · ENRICHMENT WILL UPDATE LATER")).not.toBeInTheDocument();
+    });
+    expect(within(panel).getByRole("button", { name: "EDIT" })).toBeInTheDocument();
   });
 
   it("renders an empty map state with no note point controls", async () => {
@@ -320,7 +723,7 @@ describe("Phase 3 map view", () => {
 
     await renderAuthenticatedMap();
 
-    await userEvent.click(screen.getByRole("button", { name: "NOTE 1" }));
+    await userEvent.click(await screen.findByRole("button", { name: "NOTE 1" }));
     await waitFor(() => {
       expect(screen.getByText("NOTE UNAVAILABLE")).toBeInTheDocument();
     });
@@ -364,7 +767,7 @@ describe("Interactive embedding map navigation", () => {
     expect(screen.queryByRole("button", { name: "ZOOM IN" })).not.toBeInTheDocument();
   });
 
-  it("AC-3/AC-4: wheel events zoom in and then zoom back toward the fitted view", async () => {
+  it("AC-3/AC-4: wheel events zoom around the cursor and then zoom back toward the fitted view", async () => {
     installFetchMock();
 
     await renderAuthenticatedMap();
@@ -373,12 +776,19 @@ describe("Interactive embedding map navigation", () => {
 
     fireEvent.wheel(viewport, { deltaY: -100, clientX: 320, clientY: 240 });
     const zoomed = readViewportTransform(viewport);
+    const expectedZoomed = expectedZoomAt(initial, 320, 240, -100);
     expect(zoomed.scale).toBeGreaterThan(initial.scale);
+    expect(zoomed.scale).toBeCloseTo(expectedZoomed.scale, 5);
+    expect(zoomed.x).toBeCloseTo(expectedZoomed.x, 5);
+    expect(zoomed.y).toBeCloseTo(expectedZoomed.y, 5);
 
     fireEvent.wheel(viewport, { deltaY: 100, clientX: 320, clientY: 240 });
     const zoomedBack = readViewportTransform(viewport);
+    const expectedZoomedBack = expectedZoomAt(zoomed, 320, 240, 100);
     expect(zoomedBack.scale).toBeLessThan(zoomed.scale);
-    expect(zoomedBack.scale).toBeGreaterThanOrEqual(initial.scale);
+    expect(zoomedBack.scale).toBeCloseTo(expectedZoomedBack.scale, 5);
+    expect(zoomedBack.x).toBeCloseTo(expectedZoomedBack.x, 5);
+    expect(zoomedBack.y).toBeCloseTo(expectedZoomedBack.y, 5);
   });
 
   it("AC-5: pointer drag pans the rendered point layer by the cursor delta", async () => {
@@ -404,14 +814,15 @@ describe("Interactive embedding map navigation", () => {
     const viewport = await screen.findByTestId("map-viewport");
 
     fireEvent.wheel(viewport, { deltaY: -100, clientX: 320, clientY: 240 });
+    const zoomed = readViewportTransform(viewport);
     fireEvent.pointerDown(viewport, { pointerId: 1, button: 0, buttons: 1, clientX: 300, clientY: 240 });
     fireEvent.pointerMove(viewport, { pointerId: 1, buttons: 1, clientX: 340, clientY: 270 });
     fireEvent.pointerUp(viewport, { pointerId: 1, button: 0, buttons: 0, clientX: 340, clientY: 270 });
 
     const transformed = readViewportTransform(viewport);
     expect(transformed.scale).toBeGreaterThan(1);
-    expect(transformed.x).toBe(40);
-    expect(transformed.y).toBe(30);
+    expect(transformed.x).toBeCloseTo(zoomed.x + 40, 5);
+    expect(transformed.y).toBeCloseTo(zoomed.y + 30, 5);
 
     await userEvent.click(screen.getByRole("button", { name: "NOTE 1" }));
 
@@ -577,7 +988,7 @@ describe("Map interaction regressions", () => {
     fireEvent.pointerUp(viewport, { pointerId: 1, button: 0, buttons: 0, clientX: 340, clientY: 270 });
 
     await userEvent.click(screen.getByRole("button", { name: "MOOD" }));
-    expect(screen.getByLabelText("MOOD COLOR LEGEND")).toBeInTheDocument();
+    expect(screen.getByLabelText("MOOD LEGEND")).toBeInTheDocument();
     expect(screen.getByTestId("legend-swatch-mood-calm").style.getPropertyValue("--legend-color")).toBe(
       moodPalette.calm,
     );
@@ -591,7 +1002,7 @@ describe("Map interaction regressions", () => {
     await userEvent.click(screen.getByRole("button", { name: "TOPIC" }));
     await userEvent.click(screen.getByRole("button", { name: "WORK" }));
     expect(screen.getByRole("button", { name: "NOTE 1" }).style.getPropertyValue("--point-color")).toBe(
-      topicColor("work"),
+      topicPointHighlightColor,
     );
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       topicMutedColor,

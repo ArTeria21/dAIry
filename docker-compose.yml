@@ -13,6 +13,9 @@ services:
       GIT_COMMITTER_NAME: dairy-bot
       GIT_COMMITTER_EMAIL: dairy-bot@local
       GIT_SSH_COMMAND: "ssh -i /tmp/runtime_ssh/github_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/tmp/runtime_ssh/known_hosts"
+      EDIT_API_TOKEN: ${EDIT_API_TOKEN:-}
+      EDIT_API_HOST: 0.0.0.0
+      EDIT_API_PORT: 8081
     volumes:
       - ./data:/app/data
       - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/data
@@ -34,6 +37,10 @@ services:
         exec /app/.venv/bin/python src/bot.py
     init: true
     restart: unless-stopped
+    networks:
+      - layer3
+    expose:
+      - "8081"
 
   layer3-backend:
     build:
@@ -48,6 +55,8 @@ services:
       WEB_COOKIE_SECURE: ${WEB_COOKIE_SECURE:-true}
       WEB_LOGIN_RATE_LIMIT_ATTEMPTS: ${WEB_LOGIN_RATE_LIMIT_ATTEMPTS:-5}
       WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60}
+      BOT_EDIT_API_URL: http://dairy-bot:8081
+      EDIT_API_TOKEN: ${EDIT_API_TOKEN:-}
     volumes:
       - ./data:/bot-data:ro
       - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/vault:ro

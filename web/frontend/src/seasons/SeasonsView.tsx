@@ -1,7 +1,6 @@
-import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import { moodPalette, topicHighlightColor, topicMutedColor } from "../design/palettes";
+import { moodPalette, type Mood } from "../design/palettes";
 import { chromeTextClass, readingTextClass } from "../design/theme";
 import {
   fetchCalendar,
@@ -9,24 +8,21 @@ import {
   topicsByDate,
   type CalendarDay,
   type CalendarPayload,
-  type TopicBucket,
   type TopicsTimelinePayload,
 } from "../services/insights";
 import { fetchMap } from "../services/map";
 import { cx } from "../ui/classNames";
+import { Legend, type LegendItem } from "../ui/Legend";
 import { Tag } from "../ui/primitives";
-
-const schematicBlue = "#0d6ea5";
-
-type DayStyle = CSSProperties & {
-  "--day-color": string;
-};
+import { CalendarHeatmap } from "./CalendarHeatmap";
+import { TopicsStream } from "./TopicsStream";
 
 export function SeasonsView() {
   const [calendar, setCalendar] = useState<CalendarPayload>({ days: [] });
   const [timeline, setTimeline] = useState<TopicsTimelinePayload>({ buckets: [] });
   const [dayTopics, setDayTopics] = useState<Map<string, Set<string>>>(new Map());
   const [selectedDay, setSelectedDay] = useState<CalendarDay | null>(null);
+  const [selectedMood, setSelectedMood] = useState<Mood | null>(null);
   const [selectedTopic, setSelectedTopic] = useState("");
   const [loaded, setLoaded] = useState(false);
 
@@ -56,7 +52,7 @@ export function SeasonsView() {
     };
   }, []);
 
-  const topicSeries = useMemo(() => buildTopicSeries(timeline.buckets), [timeline.buckets]);
+  const moodLegendItems = useMemo(() => buildMoodLegendItems(calendar.days), [calendar.days]);
 
   if (!loaded) {
     return <p className={chromeTextClass}>LOADING SEASONS</p>;
@@ -65,80 +61,30 @@ export function SeasonsView() {
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
       <section className="grid gap-5">
-        <div
-          aria-label="MOOD CALENDAR"
-          className="grid min-h-[240px] grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2 rounded-[2px] border border-hairline bg-cream-paper p-3"
-        >
-          {calendar.days.length === 0 ? (
-            <p className={cx(chromeTextClass, "col-span-full self-center text-center text-[11px] text-slate")}>
-              NO DAYS TO SHOW
-            </p>
-          ) : (
-            calendar.days.map((day) => (
-              <DayCell
-                day={day}
-                key={day.date}
-                onSelect={setSelectedDay}
-                selectedTopic={selectedTopic}
-                topics={dayTopics.get(day.date)}
-              />
-            ))
-          )}
-        </div>
+        <Legend
+          activeKey={selectedMood}
+          ariaLabel="MOOD LEGEND"
+          items={moodLegendItems}
+          onToggle={(key) => setSelectedMood((current) => (current === key ? null : (key as Mood)))}
+        />
+        <CalendarHeatmap
+          days={calendar.days}
+          onSelectDay={setSelectedDay}
+          selectedDay={selectedDay}
+          selectedMood={selectedMood}
+          selectedTopic={selectedTopic}
+          topicsByDate={dayTopics}
+        />
 
-        <section className="grid gap-3 rounded-[2px] border border-hairline bg-cream-paper p-3">
-          <div className={cx(chromeTextClass, "text-[10px] text-slate")}>TOPICS OVER TIME</div>
-          {topicSeries.length === 0 ? (
-            <p className={cx(chromeTextClass, "text-[11px] text-slate")}>NO TOPIC SIGNAL</p>
-          ) : (
-            topicSeries.map((series) => (
-              <TopicSparkline
-                key={series.topic}
-                onSelect={setSelectedTopic}
-                selected={selectedTopic === series.topic}
-                series={series}
-              />
-            ))
-          )}
-        </section>
+        <TopicsStream
+          buckets={timeline.buckets}
+          onSelectTopic={(topic) => setSelectedTopic((current) => (current === topic ? "" : topic))}
+          selectedTopic={selectedTopic}
+        />
       </section>
 
       <DayPanel day={selectedDay} />
     </div>
-  );
-}
-
-function DayCell({
-  day,
-  onSelect,
-  selectedTopic,
-  topics,
-}: {
-  day: CalendarDay;
-  onSelect: (day: CalendarDay) => void;
-  selectedTopic: string;
-  topics?: Set<string>;
-}) {
-  const matchesTopic = !selectedTopic || topics?.has(selectedTopic);
-  const color = matchesTopic ? moodPalette[day.mood] : topicMutedColor;
-  const style: DayStyle = {
-    "--day-color": color,
-    backgroundColor: "var(--day-color)",
-  };
-
-  return (
-    <button
-      aria-label={day.date}
-      className={cx(
-        chromeTextClass,
-        "min-h-[58px] rounded-[2px] border border-hairline p-2 text-left text-[10px] transition-opacity",
-      )}
-      onClick={() => onSelect(day)}
-      style={style}
-      type="button"
-    >
-      <span>{day.date}</span>
-    </button>
   );
 }
 
@@ -158,9 +104,12 @@ function DayPanel({ day }: { day: CalendarDay | null }) {
       role="complementary"
     >
       <div className="flex items-center justify-between gap-3">
-        <Tag>{day.mood.toUpperCase()}</Tag>
+        <Tag>{day.mood ? day.mood.toUpperCase() : "NO MOOD"}</Tag>
         <span className={cx(chromeTextClass, "text-[10px] text-slate")}>{day.weekday}</span>
       </div>
+      <a className={cx(chromeTextClass, "text-[10px] text-schematic-blue")} href={`#journal/${day.date}`}>
+        READ THIS DAY
+      </a>
       <p className={cx(readingTextClass, "text-sm leading-6")}>{day.summary}</p>
       <div className="flex flex-wrap gap-2">
         {factChips(day.facts).map((chip) => (
@@ -171,69 +120,23 @@ function DayPanel({ day }: { day: CalendarDay | null }) {
   );
 }
 
-function TopicSparkline({
-  onSelect,
-  selected,
-  series,
-}: {
-  onSelect: (topic: string) => void;
-  selected: boolean;
-  series: TopicSeries;
-}) {
-  const stroke = selected ? topicHighlightColor : schematicBlue;
-
-  return (
-    <button
-      aria-pressed={selected}
-      className="grid grid-cols-[80px_1fr] items-center gap-3 rounded-[2px] border border-hairline bg-transparent p-2 text-left"
-      onClick={() => onSelect(series.topic)}
-      type="button"
-    >
-      <span className={cx(chromeTextClass, "font-plexmono text-[10px]")}>
-        {series.topic.toUpperCase()}
-      </span>
-      <svg aria-hidden="true" className="h-8 w-full" viewBox="0 0 120 32">
-        <polyline
-          data-testid={`topic-sparkline-${series.topic}`}
-          fill="none"
-          points={sparklinePoints(series.values)}
-          stroke={stroke}
-          strokeWidth="1"
-        />
-      </svg>
-    </button>
-  );
-}
-
-type TopicSeries = {
-  topic: string;
-  values: number[];
-};
-
-function buildTopicSeries(buckets: TopicBucket[]): TopicSeries[] {
-  const topics = new Set<string>();
-  buckets.forEach((bucket) => {
-    Object.keys(bucket.counts).forEach((topic) => topics.add(topic));
+function buildMoodLegendItems(days: CalendarDay[]): LegendItem[] {
+  const counts = new Map<Mood, number>();
+  days.forEach((day) => {
+    if (day.mood) {
+      counts.set(day.mood, (counts.get(day.mood) ?? 0) + 1);
+    }
   });
 
-  return [...topics].sort().map((topic) => ({
-    topic,
-    values: buckets.map((bucket) => bucket.counts[topic] ?? 0),
-  }));
-}
-
-function sparklinePoints(values: number[]): string {
-  if (values.length === 0) {
-    return "";
-  }
-  const max = Math.max(1, ...values);
-  return values
-    .map((value, index) => {
-      const x = values.length === 1 ? 0 : (index / (values.length - 1)) * 120;
-      const y = 28 - (value / max) * 24;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+  return (Object.keys(moodPalette) as Mood[])
+    .filter((mood) => counts.has(mood))
+    .map((mood) => ({
+      key: mood,
+      label: mood.toUpperCase(),
+      count: counts.get(mood),
+      swatch: moodPalette[mood],
+      swatchTestId: `mood-swatch-${mood}`,
+    }));
 }
 
 function factChips(facts: CalendarDay["facts"]): string[] {

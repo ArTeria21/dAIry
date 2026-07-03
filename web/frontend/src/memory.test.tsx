@@ -84,6 +84,10 @@ describe("Phase 4 memory view", () => {
     expect(within(card).getByText("A focused day of prototyping.")).toHaveClass(
       "font-gerstnerprogramm",
     );
+    expect(within(card).getByRole("link", { name: "READ THIS DAY" })).toHaveAttribute(
+      "href",
+      "#journal/2026-02-13",
+    );
     expect(screen.queryByText("private transcript should never render")).not.toBeInTheDocument();
     expect(screen.queryByText(/Users\/artem/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Vault/)).not.toBeInTheDocument();

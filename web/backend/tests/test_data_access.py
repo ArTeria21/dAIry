@@ -137,6 +137,56 @@ def test_AC_1_read_store_uses_sqlite_read_only_mode_and_parses_notes_days(tmp_pa
             )
 
 
+def test_E7_note_content_hashes_degrades_when_state_table_is_absent(tmp_path):
+    db_path = tmp_path / "enrichment.sqlite3"
+    create_enrichment_db(db_path)
+    store = EnrichmentReadStore(db_path)
+
+    assert store.note_content_hashes() == {}
+
+
+def test_E8_note_content_hashes_reads_available_state_rows_only(tmp_path):
+    db_path = tmp_path / "enrichment.sqlite3"
+    create_enrichment_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE note_entry_state (
+                id TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO notes (
+                id, date, ts, note_path, gist, mood, mood_confidence,
+                topics_json, mood_evidence, embedding
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "2026-06-17T10:15",
+                "2026-06-17",
+                "10:15",
+                "2026/06/2026-06-17.md",
+                "A second synthetic note.",
+                "calm",
+                0.7,
+                json.dumps(["learning"]),
+                "Synthetic evidence.",
+                json.dumps([0.2, 0.3, 0.4]),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO note_entry_state (id, content_hash) VALUES (?, ?)",
+            ("2026-06-16T21:55", "hash-a"),
+        )
+    store = EnrichmentReadStore(db_path)
+
+    assert store.note_content_hashes() == {"2026-06-16T21:55": "hash-a"}
+
+
 def test_AC_2_vault_reader_extracts_matching_entry_without_managed_enrichment(tmp_path):
     note_path = tmp_path / "2026" / "06" / "2026-06-16.md"
     note_path.parent.mkdir(parents=True)

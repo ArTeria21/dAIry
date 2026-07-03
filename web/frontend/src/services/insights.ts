@@ -1,4 +1,5 @@
 import type { MapPayload } from "./map";
+import type { Mood } from "../design/palettes";
 
 export type DayFacts = {
   sleep_quality?: number | null;
@@ -14,8 +15,8 @@ export type CalendarDay = {
   weekday: string;
   is_weekend: boolean;
   season: string;
-  mood: "joy" | "calm" | "sadness" | "anger" | "fear" | "neutral" | "mixed";
-  mood_confidence: number;
+  mood: Mood | null;
+  mood_confidence: number | null;
   summary: string;
   facts: DayFacts;
 };
@@ -27,6 +28,7 @@ export type CalendarPayload = {
 export type TopicBucket = {
   period: string;
   counts: Record<string, number>;
+  total: number;
 };
 
 export type TopicsTimelinePayload = {
@@ -36,7 +38,7 @@ export type TopicsTimelinePayload = {
 export type ResurfaceDay = {
   date: string;
   weekday: string;
-  mood: CalendarDay["mood"];
+  mood: Mood;
   key_topics: string[];
   summary: string;
 };

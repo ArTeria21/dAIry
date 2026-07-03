@@ -137,6 +137,10 @@ WEB_SESSION_SECRET=replace-with-long-random-secret
 WEB_COOKIE_SECURE=true
 WEB_LOGIN_RATE_LIMIT_ATTEMPTS=5
 WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS=60
+
+# Optional web-to-bot note editing. Empty keeps editing disabled.
+# Generate with: openssl rand -hex 32
+EDIT_API_TOKEN=
 ```
 
 `JOURNAL_DIR` — путь внутри приложения. Для Docker оставляйте `/data`.
@@ -215,6 +219,14 @@ LAYER3_FRONTEND_PORT=18080
 ```
 
 Point the existing HTTPS reverse proxy at `http://127.0.0.1:18080`. Keep `WEB_COOKIE_SECURE=true` in production so the auth cookie is `Secure` behind TLS. For local HTTP-only testing, temporarily set `WEB_COOKIE_SECURE=false`.
+
+### Editing from the web
+
+Web note edits are opt-in. Set the same `EDIT_API_TOKEN` for `dairy-bot` and `layer3-backend`; generate it with `openssl rand -hex 32`. If it is empty, the bot does not start the internal edit API and saves from the frontend return `EDITING DISABLED`.
+
+The backend keeps the vault mount read-only and never edits diary files directly. It proxies `PUT /api/notes/{id}` to the bot over the private compose network at `http://dairy-bot:8081`; that port is not published on the host.
+
+Edits use `raw_text_sha256` for optimistic conflict detection. A 409 reloads the fresh note/day and keeps the user's unsaved draft visible; successful edits are reprocessed later by the enrichment watchdog.
 
 ## Запуск через Docker
 

@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     enrichment_db_path: Path = Field(
         default=Path("data/enrichment.sqlite3"), alias="ENRICHMENT_DB_PATH"
     )
+    edit_api_token: SecretStr | None = Field(default=None, alias="EDIT_API_TOKEN")
+    edit_api_host: str = Field(default="0.0.0.0", alias="EDIT_API_HOST")
+    edit_api_port: int = Field(default=8081, alias="EDIT_API_PORT")
 
     @field_validator("timezone", mode="before")
     @classmethod

@@ -16,6 +16,7 @@ from dairy_bot.services.background_reconciler import (
     stop_background_reconciliation,
 )
 from dairy_bot.services.enrichment_client import build_enrichment_client
+from dairy_bot.services.edit_api import start_edit_api, stop_edit_api
 from dairy_bot.services.git_sync import GitService
 from dairy_bot.services.toc_service import reconcile_toc
 
@@ -90,12 +91,15 @@ async def main() -> None:
     await bot.delete_webhook(drop_pending_updates=True)
 
     background_tasks = await start_background_reconciliation(settings, git_service)
+    edit_api_runner = None
 
     try:
+        edit_api_runner = await start_edit_api(settings, git_service)
         await dispatcher.start_polling(
             bot, allowed_updates=dispatcher.resolve_used_update_types()
         )
     finally:
+        await stop_edit_api(edit_api_runner)
         await stop_background_reconciliation(background_tasks)
         await bot.session.close()
 
