@@ -58,11 +58,10 @@ def frontmatter(path: Path) -> dict:
     return yaml.safe_load(raw)
 
 
-def test_AC_1_day_enrichment_updates_yaml_and_sqlite_quietly(tmp_path):
+def test_AC_N4_day_enrichment_passes_exact_raw_file_to_llm(tmp_path):
     path = note_path(tmp_path, "2026-02-13")
     path.parent.mkdir(parents=True)
-    path.write_text(
-        """---
+    raw_content = """---
 date: 2026-02-13
 type: daily
 ---
@@ -79,9 +78,8 @@ mood:: anger · topics:: learning, identity
 Сходил на пробежку, немного отпустило.
 <!-- dairy:note-enrichment -->
 mood:: calm · topics:: fitness
-""",
-        encoding="utf-8",
-    )
+"""
+    path.write_text(raw_content, encoding="utf-8")
     store = EnrichmentStore(tmp_path / "data" / "enrichment.sqlite3")
     client = FakeDayClient()
 
@@ -100,7 +98,7 @@ mood:: calm · topics:: fitness
     assert data["is_weekend"] is False
     assert data["season"] == "winter"
     assert "German lesson" in data["summary"]
-    assert len(client.calls) == 1
+    assert client.calls == [raw_content]
 
     row = store.get_day("2026-02-13")
     assert row is not None
@@ -109,7 +107,6 @@ mood:: calm · topics:: fitness
     assert row["sport"] == 1
     assert row["reading"] is None
     assert row["weekday"] == "Friday"
-    assert "<!-- dairy:note-enrichment -->" not in client.calls[0]
 
 
 def test_EC_1_day_enrichment_preserves_sparse_nulls_in_yaml_and_db(tmp_path):

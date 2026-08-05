@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import dairy_web.data_access as data_access
 from dairy_web.data_access import EnrichmentReadStore
 from dairy_web.vault_reader import NoteRawTextNotFound, extract_note_raw_text
 
@@ -23,8 +24,12 @@ def create_enrichment_db(path: Path) -> None:
                 mood TEXT NOT NULL,
                 mood_confidence REAL NOT NULL,
                 topics_json TEXT NOT NULL,
-                mood_evidence TEXT NOT NULL,
-                embedding TEXT NOT NULL
+                mood_evidence TEXT NOT NULL
+            );
+
+            CREATE TABLE note_entry_state (
+                id TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL
             );
 
             CREATE TABLE days (
@@ -55,9 +60,9 @@ def create_enrichment_db(path: Path) -> None:
             """
             INSERT INTO notes (
                 id, date, ts, note_path, gist, mood, mood_confidence,
-                topics_json, mood_evidence, embedding
+                topics_json, mood_evidence
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "2026-06-16T21:55",
@@ -69,8 +74,11 @@ def create_enrichment_db(path: Path) -> None:
                 0.82,
                 json.dumps(["learning", "reflection"]),
                 "The note is reflective and calm.",
-                json.dumps([0.1, 0.2, 0.3]),
             ),
+        )
+        conn.execute(
+            "INSERT INTO note_entry_state (id, content_hash) VALUES (?, ?)",
+            ("2026-06-16T21:55", "hash-a"),
         )
         conn.execute(
             """
@@ -106,9 +114,63 @@ def create_enrichment_db(path: Path) -> None:
                 "summer",
             ),
         )
+    create_embeddings_db(path.with_name("embeddings.sqlite3"))
 
 
-def test_AC_1_read_store_uses_sqlite_read_only_mode_and_parses_notes_days(tmp_path):
+def create_embeddings_db(path: Path, *, status: str = "ready") -> None:
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE semantic_embeddings (
+                document_id TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                model TEXT NOT NULL,
+                recipe_version TEXT NOT NULL,
+                dimension INTEGER NOT NULL,
+                embedding TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (document_id, model, recipe_version)
+            );
+            CREATE TABLE semantic_index_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                status TEXT NOT NULL,
+                corpus_hash TEXT NOT NULL,
+                model TEXT NOT NULL,
+                recipe_version TEXT NOT NULL,
+                next_retry_at TEXT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO semantic_embeddings VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "diary:2026-06-16T21:55",
+                "hash-a",
+                "intfloat/multilingual-e5-large",
+                "e5-query-passage-v1",
+                3,
+                json.dumps([0.1, 0.2, 0.3]),
+                "2026-08-05T12:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO semantic_index_state VALUES (1, ?, ?, ?, ?, NULL, ?)
+            """,
+            (
+                status,
+                "corpus-v1",
+                "intfloat/multilingual-e5-large",
+                "e5-query-passage-v1",
+                "2026-08-05T12:00:00+00:00",
+            ),
+        )
+
+
+def test_AC_4_read_store_uses_shared_semantic_vectors_and_parses_notes_days(tmp_path):
     db_path = tmp_path / "enrichment.sqlite3"
     create_enrichment_db(db_path)
     store = EnrichmentReadStore(db_path)
@@ -119,6 +181,10 @@ def test_AC_1_read_store_uses_sqlite_read_only_mode_and_parses_notes_days(tmp_pa
     assert [note.id for note in notes] == ["2026-06-16T21:55"]
     assert notes[0].topics == ["learning", "reflection"]
     assert notes[0].embedding == [0.1, 0.2, 0.3]
+    with sqlite3.connect(db_path) as conn:
+        assert "embedding" not in {
+            row[1] for row in conn.execute("PRAGMA table_info(notes)")
+        }
     assert [day.date for day in days] == ["2026-06-16"]
     assert days[0].facts == {
         "sport": True,
@@ -140,6 +206,8 @@ def test_AC_1_read_store_uses_sqlite_read_only_mode_and_parses_notes_days(tmp_pa
 def test_E7_note_content_hashes_degrades_when_state_table_is_absent(tmp_path):
     db_path = tmp_path / "enrichment.sqlite3"
     create_enrichment_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE note_entry_state")
     store = EnrichmentReadStore(db_path)
 
     assert store.note_content_hashes() == {}
@@ -149,21 +217,13 @@ def test_E8_note_content_hashes_reads_available_state_rows_only(tmp_path):
     db_path = tmp_path / "enrichment.sqlite3"
     create_enrichment_db(db_path)
     with sqlite3.connect(db_path) as conn:
-        conn.executescript(
-            """
-            CREATE TABLE note_entry_state (
-                id TEXT PRIMARY KEY,
-                content_hash TEXT NOT NULL
-            );
-            """
-        )
         conn.execute(
             """
             INSERT INTO notes (
                 id, date, ts, note_path, gist, mood, mood_confidence,
-                topics_json, mood_evidence, embedding
+                topics_json, mood_evidence
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "2026-06-17T10:15",
@@ -175,16 +235,24 @@ def test_E8_note_content_hashes_reads_available_state_rows_only(tmp_path):
                 0.7,
                 json.dumps(["learning"]),
                 "Synthetic evidence.",
-                json.dumps([0.2, 0.3, 0.4]),
             ),
-        )
-        conn.execute(
-            "INSERT INTO note_entry_state (id, content_hash) VALUES (?, ?)",
-            ("2026-06-16T21:55", "hash-a"),
         )
     store = EnrichmentReadStore(db_path)
 
     assert store.note_content_hashes() == {"2026-06-16T21:55": "hash-a"}
+
+
+def test_AC_7_read_store_reports_building_semantic_index(tmp_path):
+    db_path = tmp_path / "enrichment.sqlite3"
+    create_enrichment_db(db_path)
+    with sqlite3.connect(tmp_path / "embeddings.sqlite3") as conn:
+        conn.execute(
+            "UPDATE semantic_index_state SET status = 'building' WHERE singleton = 1"
+        )
+    store = EnrichmentReadStore(db_path)
+
+    with pytest.raises(getattr(data_access, "SemanticIndexBuilding")):
+        store.list_notes()
 
 
 def test_AC_2_vault_reader_extracts_matching_entry_without_managed_enrichment(tmp_path):

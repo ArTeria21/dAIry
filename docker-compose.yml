@@ -16,6 +16,17 @@ services:
       EDIT_API_TOKEN: ${EDIT_API_TOKEN:-}
       EDIT_API_HOST: 0.0.0.0
       EDIT_API_PORT: 8081
+      REVIEWS_ENABLED: "${REVIEWS_ENABLED:-false}"
+      EMBEDDINGS_DB_PATH: /app/data/embeddings.sqlite3
+      REVIEWS_DB_PATH: /app/data/reviews.sqlite3
+      REVIEW_ASSETS_DIR: /app/data/review_images
+      REVIEW_MODEL_NAME: ${REVIEW_MODEL_NAME:-openai/gpt-5.6-terra}
+      REVIEW_IMAGE_MODEL_NAME: ${REVIEW_IMAGE_MODEL_NAME:-openai/gpt-image-2}
+      REVIEW_IMAGE_FALLBACK_MODEL_NAME: ${REVIEW_IMAGE_FALLBACK_MODEL_NAME:-recraft/recraft-v4.1-pro}
+      REVIEW_MAX_SEARCH_CALLS: "${REVIEW_MAX_SEARCH_CALLS:-6}"
+      REVIEW_WEEKLY_SEND_TIME: "${REVIEW_WEEKLY_SEND_TIME:-09:00}"
+      REVIEW_MONTHLY_SEND_TIME: "${REVIEW_MONTHLY_SEND_TIME:-10:00}"
+      WEB_PUBLIC_BASE_URL: ${WEB_PUBLIC_BASE_URL:-http://127.0.0.1:18080}
     volumes:
       - ./data:/app/data
       - ${HOST_JOURNAL_DIR:-/path/to/obsidian/repo}:/data
@@ -50,8 +61,11 @@ services:
       - .env
     environment:
       ENRICHMENT_DB_PATH: /bot-data/enrichment.sqlite3
+      EMBEDDINGS_DB_PATH: /bot-data/embeddings.sqlite3
       VAULT_DIR: /vault
       ANALYSIS_CACHE_PATH: /app/cache/analysis_cache.sqlite3
+      REVIEWS_DB_PATH: /bot-data/reviews.sqlite3
+      REVIEW_ASSETS_DIR: /bot-data/review_images
       WEB_COOKIE_SECURE: ${WEB_COOKIE_SECURE:-true}
       WEB_LOGIN_RATE_LIMIT_ATTEMPTS: ${WEB_LOGIN_RATE_LIMIT_ATTEMPTS:-5}
       WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-60}

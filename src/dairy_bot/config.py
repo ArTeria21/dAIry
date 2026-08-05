@@ -1,9 +1,12 @@
 import logging
+from datetime import time
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_TZ_NAME = "Europe/Vienna"
@@ -63,6 +66,40 @@ class Settings(BaseSettings):
     enrichment_db_path: Path = Field(
         default=Path("data/enrichment.sqlite3"), alias="ENRICHMENT_DB_PATH"
     )
+    embeddings_db_path: Path = Field(
+        default=Path("data/embeddings.sqlite3"), alias="EMBEDDINGS_DB_PATH"
+    )
+    # Weekly and monthly diary reviews
+    reviews_enabled: bool = Field(default=False, alias="REVIEWS_ENABLED")
+    reviews_db_path: Path = Field(
+        default=Path("data/reviews.sqlite3"), alias="REVIEWS_DB_PATH"
+    )
+    review_assets_dir: Path = Field(
+        default=Path("data/review_images"), alias="REVIEW_ASSETS_DIR"
+    )
+    review_model_name: str = Field(
+        default="openai/gpt-5.6-terra", alias="REVIEW_MODEL_NAME"
+    )
+    review_image_model_name: str = Field(
+        default="openai/gpt-image-2", alias="REVIEW_IMAGE_MODEL_NAME"
+    )
+    review_image_fallback_model_name: str = Field(
+        default="recraft/recraft-v4.1-pro",
+        alias="REVIEW_IMAGE_FALLBACK_MODEL_NAME",
+    )
+    review_max_search_calls: int = Field(
+        default=6, ge=0, le=6, alias="REVIEW_MAX_SEARCH_CALLS"
+    )
+    parallel_api_key: SecretStr | None = Field(default=None, alias="PARALLEL_API_KEY")
+    review_weekly_send_time: time = Field(
+        default=time(9, 0), alias="REVIEW_WEEKLY_SEND_TIME"
+    )
+    review_monthly_send_time: time = Field(
+        default=time(10, 0), alias="REVIEW_MONTHLY_SEND_TIME"
+    )
+    web_public_base_url: str = Field(
+        default="http://127.0.0.1:18080", alias="WEB_PUBLIC_BASE_URL"
+    )
     edit_api_token: SecretStr | None = Field(default=None, alias="EDIT_API_TOKEN")
     edit_api_host: str = Field(default="0.0.0.0", alias="EDIT_API_HOST")
     edit_api_port: int = Field(default=8081, alias="EDIT_API_PORT")
@@ -87,6 +124,39 @@ class Settings(BaseSettings):
                 DEFAULT_TZ_NAME,
             )
         return DEFAULT_TZ
+
+    @model_validator(mode="after")
+    def _validate_reviews_public_url(self) -> "Settings":
+        if not self.reviews_enabled:
+            return self
+        parsed = urlsplit(self.web_public_base_url)
+        hostname = parsed.hostname
+        if parsed.scheme != "https" or not hostname:
+            raise ValueError(
+                "WEB_PUBLIC_BASE_URL must be an absolute public HTTPS URL "
+                "when REVIEWS_ENABLED=true"
+            )
+        normalized_host = hostname.rstrip(".").lower()
+        if (
+            normalized_host == "localhost"
+            or normalized_host.endswith(".localhost")
+            or normalized_host == "example.com"
+            or normalized_host.endswith(".example.com")
+        ):
+            raise ValueError(
+                "WEB_PUBLIC_BASE_URL must use a public non-placeholder host "
+                "when REVIEWS_ENABLED=true"
+            )
+        try:
+            address = ip_address(normalized_host)
+        except ValueError:
+            return self
+        if not address.is_global:
+            raise ValueError(
+                "WEB_PUBLIC_BASE_URL must not use a loopback or private address "
+                "when REVIEWS_ENABLED=true"
+            )
+        return self
 
     @property
     def toc_model(self) -> str:

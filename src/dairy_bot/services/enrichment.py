@@ -29,8 +29,6 @@ DAILY_NOTE_RE = re.compile(r"^\d{4}/\d{2}/\d{4}-\d{2}-\d{2}\.md$")
 class NoteClient(Protocol):
     async def enrich_note(self, text: str) -> NoteEnrichment: ...
 
-    async def embed_note(self, text: str) -> list[float]: ...
-
 
 class DayClient(Protocol):
     async def enrich_day(self, text: str) -> DayEnrichment: ...
@@ -149,7 +147,7 @@ async def enrich_daily_note_notes_with_results(
     content = await read_text(note_path)
     entries = parse_daily_entries(content, note_path)
     rel_path = str(note_path.relative_to(journal_dir))
-    pending: list[tuple[DailyEntry, NoteEnrichment, list[float]]] = []
+    pending: list[tuple[DailyEntry, NoteEnrichment]] = []
     changed_results: list[NoteEnrichmentResult] = []
 
     for entry in entries:
@@ -163,12 +161,11 @@ async def enrich_daily_note_notes_with_results(
             continue
         try:
             enrichment = await client.enrich_note(entry.text)
-            embedding = await client.embed_note(entry.text)
         except Exception as exc:
             raise NoteEnrichmentFailure(
                 f"Failed to enrich note entry {entry.entry_id}"
             ) from exc
-        pending.append((entry, enrichment, embedding))
+        pending.append((entry, enrichment))
         changed_results.append(
             NoteEnrichmentResult(
                 entry_id=entry.entry_id,
@@ -185,18 +182,17 @@ async def enrich_daily_note_notes_with_results(
         )
         return NoteEnrichmentRun(changed=False, results=[])
 
-    enriched_by_id = {entry.entry_id: enrichment for entry, enrichment, _ in pending}
+    enriched_by_id = {entry.entry_id: enrichment for entry, enrichment in pending}
     updated_content = _render_note_enrichments(content, entries, enriched_by_id)
     await write_text(note_path, updated_content)
 
-    for entry, enrichment, embedding in pending:
+    for entry, enrichment in pending:
         store.upsert_note(
             note_id=entry.entry_id,
             date=entry.date,
             ts=entry.timestamp,
             note_path=rel_path,
             enrichment=enrichment,
-            embedding=embedding,
             content_hash=entry.content_hash,
         )
     store.delete_notes_missing_from_path(rel_path, {entry.entry_id for entry in entries})
@@ -215,7 +211,7 @@ async def enrich_day_summary(
     content = await read_text(note_path)
     note_date = _date_from_path(note_path)
     try:
-        enrichment = await client.enrich_day(_clean_for_day_prompt(content))
+        enrichment = await client.enrich_day(content)
     except Exception:
         raise DayEnrichmentFailure(f"Failed to enrich day {note_path}") from None
 
@@ -327,18 +323,6 @@ def _content_hash(text: str) -> str:
 
 def _date_from_path(path: Path) -> str:
     return path.stem
-
-
-def _clean_for_day_prompt(content: str) -> str:
-    _, body = _split_frontmatter(content)
-    lines = [
-        line
-        for line in body.splitlines()
-        if line.strip() != ENRICHMENT_MARKER
-    ]
-    return "\n".join(lines).strip()
-
-
 def _split_frontmatter(content: str) -> tuple[dict[str, object], str]:
     lines = content.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":

@@ -41,11 +41,24 @@ export type NoteDetails = {
   note_path: string;
 };
 
+export class SemanticIndexBuildingError extends Error {
+  constructor() {
+    super("SEMANTIC INDEX IS BEING BUILT");
+    this.name = "SemanticIndexBuildingError";
+  }
+}
+
 export async function fetchMap(): Promise<MapPayload> {
   const response = await fetch("/api/map", {
     credentials: "include",
   });
   if (!response.ok) {
+    if (response.status === 503) {
+      const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+      if (body?.detail === "semantic_index_building") {
+        throw new SemanticIndexBuildingError();
+      }
+    }
     throw new Error("MAP UNAVAILABLE");
   }
   return response.json() as Promise<MapPayload>;

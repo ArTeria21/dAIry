@@ -18,6 +18,7 @@
 - Git sync включается через `GIT_ENABLED=true`: бот подтягивает remote перед записью, затем коммитит и пушит изменения.
 - TOC слой включается через `TOC_ENABLED=true`: бот поддерживает `table_of_contents.md` и `.toc_index.json`, включая изменения, добавленные в прошлые дни.
 - Enrichment слой включается через `ENRICHMENT_ENABLED=true`: новые записи через бота, включая post-factum записи через `/day` и `/yesterday`, получают note-level mood/topics сразу после сохранения. Ручные правки старых дней обрабатываются тихим watchdog-проходом вместе с TOC.
+- Reviews включаются через `REVIEWS_ENABLED=true`: бот создаёт компактные недельные и месячные обзоры, присылает короткую версию в Telegram, а полный текст публикует в web-интерфейсе.
 - Доступ ограничен одним Telegram-пользователем через `ALLOWED_USER_ID`.
 
 ## Формат заметок
@@ -127,6 +128,21 @@ ENRICHMENT_ENABLED=true
 ENRICHMENT_MODEL_NAME=openai/gpt-4.1-mini
 EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-large
 ENRICHMENT_DB_PATH=data/enrichment.sqlite3
+EMBEDDINGS_DB_PATH=data/embeddings.sqlite3
+
+# Weekly/monthly reviews
+REVIEWS_ENABLED=false
+REVIEWS_DB_PATH=data/reviews.sqlite3
+REVIEW_ASSETS_DIR=data/review_images
+REVIEW_MODEL_NAME=openai/gpt-5.6-terra
+REVIEW_IMAGE_MODEL_NAME=openai/gpt-image-2
+REVIEW_IMAGE_FALLBACK_MODEL_NAME=recraft/recraft-v4.1-pro
+REVIEW_MAX_SEARCH_CALLS=6
+# Optional; omit to disable external web search.
+# PARALLEL_API_KEY=your-parallel-api-key
+REVIEW_WEEKLY_SEND_TIME=09:00
+REVIEW_MONTHLY_SEND_TIME=10:00
+WEB_PUBLIC_BASE_URL=https://journal.example.com
 
 # Layer 3 web analytics
 LAYER3_FRONTEND_BIND=127.0.0.1
@@ -157,7 +173,7 @@ SSH_KEY_PATH=/Users/artem/.ssh/id_ed25519
 
 `TOC_MODEL_NAME` используется только для TOC enrichment: модель делает короткое summary и выбирает теги для `table_of_contents.md`.
 
-`ENRICHMENT_MODEL_NAME` используется для note-level и day-level structured output. `EMBEDDING_MODEL_NAME` используется для embedding каждой note-level записи; оставляйте здесь embedding-модель, например `intfloat/multilingual-e5-large` (1024-мерные embedding'и), а не chat-модель или экспериментальный slug. SQLite cache хранится в `data/enrichment.sqlite3`; папка `data/` добавлена в `.gitignore`, потому что база является локальным пересобираемым кэшем, а не source of truth.
+`ENRICHMENT_MODEL_NAME` используется для note-level и day-level structured output. `EMBEDDING_MODEL_NAME` используется для единого semantic index всех diary entries; оставляйте здесь embedding-модель, например `intfloat/multilingual-e5-large` (1024-мерные embedding'и), а не chat-модель или экспериментальный slug. Metadata enrichment хранится в `data/enrichment.sqlite3`, общие vectors карты и reviews — в `data/embeddings.sqlite3`; локальные review DB и изображения также хранятся в `data/` и не коммитятся.
 
 Если нужен временный capture-only режим без дополнительных LLM/embedding вызовов, поставьте:
 
@@ -175,10 +191,10 @@ GIT_ENABLED=false
 
 Layer 3 adds two containers:
 
-- `layer3-backend` — FastAPI API, auth, read-only access to `data/enrichment.sqlite3` and the vault, plus its own writable `layer3-analysis-cache` Docker volume.
+- `layer3-backend` — FastAPI API, auth, read-only access to `data/enrichment.sqlite3`, `data/embeddings.sqlite3` and the vault, plus its own writable `layer3-analysis-cache` Docker volume.
 - `layer3-frontend` — nginx serving the Vite SPA and proxying `/api/*` to the backend on the private Docker network.
 
-The backend mounts bot outputs read-only:
+The backend mounts bot outputs read-only, including the reviews DB and generated posters:
 
 ```yaml
 ./data:/bot-data:ro
@@ -189,6 +205,9 @@ It overrides paths inside the container:
 
 ```bash
 ENRICHMENT_DB_PATH=/bot-data/enrichment.sqlite3
+EMBEDDINGS_DB_PATH=/bot-data/embeddings.sqlite3
+REVIEWS_DB_PATH=/bot-data/reviews.sqlite3
+REVIEW_ASSETS_DIR=/bot-data/review_images
 VAULT_DIR=/vault
 ANALYSIS_CACHE_PATH=/app/cache/analysis_cache.sqlite3
 ```
@@ -250,9 +269,9 @@ docker compose logs -f layer3-backend layer3-frontend
 
 Compose монтирует `SSH_KEY_PATH` в контейнер, копирует ключ во временную директорию, выставляет права `0600` и запускает бот через `/app/.venv/bin/python`. Это важно: системный `python` внутри контейнера не содержит зависимости проекта.
 
-SQLite cache enrichment слоя монтируется из локальной папки проекта `./data` в контейнерный путь `/app/data`. При `ENRICHMENT_DB_PATH=data/enrichment.sqlite3` файл будет виден на хосте как `data/enrichment.sqlite3`.
+SQLite caches bot-owned слоёв монтируются из локальной папки проекта `./data` в контейнерный путь `/app/data`. При стандартных путях metadata будет видна как `data/enrichment.sqlite3`, а общий semantic index — как `data/embeddings.sqlite3`.
 
-Layer 3 читает этот же файл как `/bot-data/enrichment.sqlite3` в режиме read-only и не пишет в bot DB. Проекция, кластеры и labels сохраняются только в Docker volume `layer3-analysis-cache`.
+Layer 3 читает оба файла как `/bot-data/enrichment.sqlite3` и `/bot-data/embeddings.sqlite3` в режиме read-only и не пишет в bot DB. Проекция, кластеры и labels сохраняются только в Docker volume `layer3-analysis-cache`.
 
 Для Git over SSH также нужен `~/.ssh/known_hosts`; он монтируется автоматически.
 
@@ -293,7 +312,7 @@ TOC обновляется:
 
 Enrichment состоит из двух уровней.
 
-**Note-level** запускается сразу для text/voice записей через бота, включая post-factum сохранение в выбранный прошлый день. Модель возвращает `gist`, `mood_evidence`, `mood`, `mood_confidence` и `topics`; в markdown записываются только `mood` и `topics`, а evidence, gist и embedding уходят в SQLite cache.
+**Note-level** запускается сразу для text/voice записей через бота, включая post-factum сохранение в выбранный прошлый день. Модель возвращает `gist`, `mood_evidence`, `mood`, `mood_confidence` и `topics`; в markdown записываются только `mood` и `topics`, а evidence и gist уходят в enrichment SQLite cache. Passage embeddings независимо индексируются в общей semantic DB и не дублируются в enrichment.
 
 **Day-level** пересчитывает весь день целиком и обновляет YAML frontmatter: `mood`, `mood_confidence`, `key_topics`, sparse facts (`sport`, `reading`, `purchases`, `eating_outside`, `deep_focus`, `sleep_quality`), `weekday`, `is_weekend`, `season` и `summary`. Evidence для sparse facts хранится в SQLite cache.
 
@@ -303,6 +322,29 @@ Day-level запускается тихо:
 - watchdog-проходом раз в `TOC_SCAN_INTERVAL_MINUTES`, если в не сегодняшнем daily note появились новые записи или изменились существующие.
 
 Watchdog сначала выполняет enrichment, затем TOC, чтобы `table_of_contents.md` индексировал уже обогащённый markdown. Изменения отслеживаются по hash текста записей (а не всего файла), поэтому перезапись frontmatter или summary не считается изменением и повторное обогащение не запускается.
+
+## Недельные и месячные reviews
+
+При `REVIEWS_ENABLED=true` бот создаёт обзор закрывшейся недели по воскресеньям в `REVIEW_WEEKLY_SEND_TIME` и обзор закрывшегося месяца первого числа в `REVIEW_MONTHLY_SEND_TIME`. Оба времени интерпретируются в `TIMEZONE`; если первое число приходится на воскресенье, weekly и monthly jobs запускаются независимо в своё время. При первом запуске непустые прошлые периоды заполняются ретроспективно, но старые обзоры не рассылаются в Telegram.
+
+Полная версия доступна в web-интерфейсе; Telegram получает короткий текст, один сгенерированный постер (если генерация изображения удалась) и кнопку на `WEB_PUBLIC_BASE_URL`. Укажите здесь внешний HTTPS-адрес, доступный с телефона, до включения scheduled-рассылки. Если обе image-модели недоступны, текстовый обзор остаётся готовым и показывается без постера.
+
+`REVIEW_MODEL_NAME` отвечает за анализ (по умолчанию `openai/gpt-5.6-terra`),
+`REVIEW_IMAGE_MODEL_NAME` и `REVIEW_IMAGE_FALLBACK_MODEL_NAME` — за постер. Planner
+сначала ищет связи с прошлыми дневниковыми записями через `search_diary` и
+сопоставляет их с предыдущими reviews. Другие Markdown-файлы vault не индексируются.
+Внешний поиск включается только при заданном
+`PARALLEL_API_KEY` и ограничен `REVIEW_MAX_SEARCH_CALLS` (максимум 6 на обзор).
+Для Parallel модель формирует self-contained objective и 2–3 взаимодополняющих
+англоязычных keyword-запроса; имена и идентифицирующие детали обобщает сама LLM.
+Web-эссе получает мягкий ориентир 250–300 слов, но длина не валидируется и не
+исправляется кодом или critic-проходом.
+
+Смысл и форма LLM-ответов контролируются только prompts и отдельным LLM-critic/revise проходом. Код не применяет regex-блоклисты, masking, semantic post-validation, обрезание или переписывание текста и visual brief. Детерминированными остаются только технические границы: JSON Schema, временная изоляция исторических периодов, безопасность путей, HTML escaping и проверка формата ответа внешнего API.
+
+То же правило действует на остальных LLM-boundaries: TOC и day enrichment получают полный raw Markdown, cluster labels и transcription возвращаются без whitespace/length cleanup, а malformed structured output не «лечится» локальными эвристиками. Markdown segmentation и managed markers остаются частью формата хранения, а не content-фильтрацией модели.
+
+Бот единолично пишет `EMBEDDINGS_DB_PATH`, `REVIEWS_DB_PATH` и `REVIEW_ASSETS_DIR`. В Docker это `/app/data/embeddings.sqlite3`, `/app/data/reviews.sqlite3` и `/app/data/review_images`; backend видит те же данные как `/bot-data/...` через read-only mount. Пока первый полный semantic pass не опубликован атомарно, карта показывает статус построения и повторяет запрос раз в 10 секунд.
 
 ## Проверки
 

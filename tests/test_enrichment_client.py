@@ -3,26 +3,13 @@ from types import SimpleNamespace
 
 from dairy_bot.services.enrichment_client import (
     OpenRouterEnrichmentClient,
-    OPENROUTER_STRUCTURED_EXTRA_BODY,
     STRUCTURED_OUTPUT_MAX_TOKENS,
     _response_format,
 )
 from dairy_bot.services.enrichment_schemas import DayEnrichment, NoteEnrichment
 
 
-class FakeEmbeddingsResource:
-    def __init__(self):
-        self.kwargs = None
-
-    async def create(self, **kwargs):
-        self.kwargs = kwargs
-        return SimpleNamespace(
-            data=[SimpleNamespace(embedding=[0.1, 0.2, 0.3])]
-        )
-
-
 class FakeSettings:
-    embedding_model_name = "openai/text-embedding-3-small"
     enrichment_model_name = "test/model"
     language = "EN"
 
@@ -51,23 +38,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def test_AC_1_embedding_request_uses_configured_model_and_float_encoding():
-    client = object.__new__(OpenRouterEnrichmentClient)
-    client.settings = FakeSettings()
-    fake_embeddings = FakeEmbeddingsResource()
-    client.client = SimpleNamespace(embeddings=fake_embeddings)
-
-    result = run(client.embed_note("journal text"))
-
-    assert result == [0.1, 0.2, 0.3]
-    assert fake_embeddings.kwargs == {
-        "model": "openai/text-embedding-3-small",
-        "input": "journal text",
-        "encoding_format": "float",
-    }
-
-
-def test_structured_completion_requires_schema_capable_openrouter_provider():
+def test_AC_N4_structured_completion_has_provider_requirement_without_healing_plugin():
     client = object.__new__(OpenRouterEnrichmentClient)
     client.settings = FakeSettings()
     completions = FakeCompletionsResource(
@@ -81,10 +52,14 @@ def test_structured_completion_requires_schema_capable_openrouter_provider():
     run(client.enrich_note("Today was calm."))
 
     assert completions.kwargs["max_tokens"] == STRUCTURED_OUTPUT_MAX_TOKENS
-    assert completions.kwargs["extra_body"] == OPENROUTER_STRUCTURED_EXTRA_BODY
-    assert completions.kwargs["response_format"] == _response_format(
-        NoteEnrichment, "note_enrichment"
-    )
+    assert completions.kwargs["extra_body"] == {
+        "provider": {"require_parameters": True}
+    }
+    assert "plugins" not in completions.kwargs["extra_body"]
+    response_format = completions.kwargs["response_format"]
+    assert response_format == _response_format(NoteEnrichment, "note_enrichment")
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
 
 
 def test_note_enrichment_response_format_uses_openai_strict_schema():

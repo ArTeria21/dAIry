@@ -27,7 +27,6 @@ from dairy_bot.services.enrichment import (  # noqa: E402
     DailyEntry,
     DayEnrichmentFailure,
     NoteEnrichmentFailure,
-    _clean_for_day_prompt,
     _derived_date_fields,
     _update_frontmatter,
     enrich_daily_note_notes,
@@ -706,7 +705,7 @@ async def _enrich_day_with_manual_overrides(
     timezone: ZoneInfo,
 ) -> bool:
     content = await read_text(note.path)
-    enrichment = await client.enrich_day(_clean_for_day_prompt(content))
+    enrichment = await client.enrich_day(content)
     enrichment = _merge_manual_overrides(enrichment, note.manual_overrides)
     derived = _derived_date_fields(note.date)
     updated = _update_frontmatter(content, enrichment, derived)

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from typing import Protocol
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 import httpx
 from pydantic import BaseModel
 
@@ -17,8 +19,14 @@ from dairy_web.auth import (
     InvalidCredentials,
     RateLimitExceeded,
 )
-from dairy_web.data_access import DayRecord, EnrichmentReadStore, NoteRecord
+from dairy_web.data_access import (
+    DayRecord,
+    EnrichmentReadStore,
+    NoteRecord,
+    SemanticIndexBuilding,
+)
 from dairy_web.resurface import choose_resurface_day
+from dairy_web.reviews import NullReviewReadStore, ReviewReadStore
 from dairy_web.settings import WebSettings
 from dairy_web.vault_reader import (
     DayNotFound,
@@ -57,6 +65,12 @@ class BotEditClient(Protocol):
     def delete_note(self, payload: dict[str, str]) -> tuple[int, dict[str, object]]: ...
 
 
+class BotReviewClient(Protocol):
+    def regenerate(self, kind: str, period: str) -> tuple[int, dict[str, object]]: ...
+
+    def get_job(self, job_id: int) -> tuple[int, dict[str, object]]: ...
+
+
 class HttpBotEditClient:
     def __init__(self, *, base_url: str, token: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -81,6 +95,28 @@ class HttpBotEditClient:
         return _decode_bot_response(response)
 
 
+class HttpBotReviewClient:
+    def __init__(self, *, base_url: str, token: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+
+    def regenerate(self, kind: str, period: str) -> tuple[int, dict[str, object]]:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                f"{self.base_url}/internal/reviews/{kind}/{period}/regenerate",
+                headers={"X-Edit-Token": self.token},
+            )
+        return _decode_bot_response(response)
+
+    def get_job(self, job_id: int) -> tuple[int, dict[str, object]]:
+        with httpx.Client(timeout=30) as client:
+            response = client.get(
+                f"{self.base_url}/internal/review-jobs/{job_id}",
+                headers={"X-Edit-Token": self.token},
+            )
+        return _decode_bot_response(response)
+
+
 def _decode_bot_response(response: httpx.Response) -> tuple[int, dict[str, object]]:
     try:
         body = response.json()
@@ -98,13 +134,19 @@ def create_app(
     vault_dir: Path | str | None = None,
     cookie_secure: bool | None = None,
     edit_client: BotEditClient | None = None,
+    review_store: object | None = None,
+    review_assets_dir: Path | str | None = None,
+    review_client: BotReviewClient | None = None,
 ) -> FastAPI:
     if settings is None and (
         store is None or analysis is None or auth is None or vault_dir is None
     ):
         settings = _settings_from_env()
 
-    store = store or EnrichmentReadStore(settings.enrichment_db_path)  # type: ignore[union-attr]
+    store = store or EnrichmentReadStore(  # type: ignore[union-attr]
+        settings.enrichment_db_path,
+        settings.embeddings_db_path,
+    )
     analysis = analysis or AnalysisService(
         store=store,
         cache=AnalysisCache(settings.analysis_cache_path),  # type: ignore[union-attr]
@@ -138,8 +180,42 @@ def create_app(
             base_url=settings.bot_edit_api_url,
             token=settings.edit_api_token,
         )
+    if review_store is None:
+        review_store = (
+            ReviewReadStore(settings.reviews_db_path)
+            if settings is not None
+            else NullReviewReadStore()
+        )
+    review_assets_root = (
+        Path(review_assets_dir)
+        if review_assets_dir is not None
+        else settings.review_assets_dir
+        if settings is not None
+        else Path("data/review_images")
+    )
+    if (
+        review_client is None
+        and settings is not None
+        and settings.bot_edit_api_url
+        and settings.edit_api_token
+    ):
+        review_client = HttpBotReviewClient(
+            base_url=settings.bot_edit_api_url,
+            token=settings.edit_api_token,
+        )
 
     app = FastAPI(title="dAIry Analytics API")
+
+    @app.exception_handler(SemanticIndexBuilding)
+    async def semantic_index_building(
+        request: Request,
+        exc: SemanticIndexBuilding,
+    ) -> JSONResponse:
+        del request, exc
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "semantic_index_building"},
+        )
 
     def current_username(
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
@@ -416,6 +492,117 @@ def create_app(
         del username
         return asdict(analysis.rebuild())
 
+    @app.get("/api/reviews")
+    def review_archive(
+        kind: str = Query(...),
+        username: str = Depends(current_username),
+    ) -> dict[str, object]:
+        del username
+        valid_kind = _validate_review_kind(kind)
+        records = review_store.list_reviews(valid_kind)  # type: ignore[attr-defined]
+        return {"reviews": [_review_archive_item(record) for record in records]}
+
+    @app.get("/api/reviews/capabilities")
+    def review_capabilities(
+        username: str = Depends(current_username),
+    ) -> dict[str, bool]:
+        del username
+        return {"regenerate": review_client is not None}
+
+    @app.get("/api/reviews/{kind}/{period}")
+    def review_detail(
+        kind: str,
+        period: str,
+        username: str = Depends(current_username),
+    ) -> dict[str, object]:
+        del username
+        valid_kind, valid_period = _validate_review_period(kind, period)
+        record = review_store.get_review(valid_kind, valid_period)  # type: ignore[attr-defined]
+        if record is None:
+            raise HTTPException(status_code=404, detail="Review not found")
+        sources = review_store.list_sources(valid_kind, valid_period)  # type: ignore[attr-defined]
+        return _review_detail_payload(record, sources)
+
+    @app.get("/api/reviews/{kind}/{period}/image")
+    def review_image(
+        kind: str,
+        period: str,
+        request: Request,
+        username: str = Depends(current_username),
+    ) -> Response:
+        del username
+        valid_kind, valid_period = _validate_review_period(kind, period)
+        record = review_store.get_review(valid_kind, valid_period)  # type: ignore[attr-defined]
+        if record is None or not record.get("image_path"):
+            raise HTTPException(status_code=404, detail="Review image not found")
+        path = _resolve_review_image(
+            review_assets_root,
+            str(record["image_path"]),
+            expected_stem=f"{valid_kind}-{valid_period}",
+        )
+        try:
+            content = path.read_bytes()
+        except OSError as error:
+            raise HTTPException(status_code=404, detail="Review image not found") from error
+        if not content.startswith(b"\xff\xd8") or not content.endswith(b"\xff\xd9"):
+            raise HTTPException(status_code=404, detail="Review image not found")
+        etag = f'"{hashlib.sha256(content).hexdigest()}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        return Response(
+            content=content,
+            media_type="image/jpeg",
+            headers={"ETag": etag, "Cache-Control": "private, max-age=3600"},
+        )
+
+    @app.post("/api/reviews/{kind}/{period}/regenerate")
+    def regenerate_review(
+        kind: str,
+        period: str,
+        username: str = Depends(current_username),
+    ) -> JSONResponse:
+        del username
+        valid_kind, valid_period = _validate_review_period(kind, period)
+        if review_client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="review_regeneration_disabled",
+            )
+        try:
+            status, body = review_client.regenerate(valid_kind, valid_period)
+        except httpx.RequestError as error:
+            raise HTTPException(status_code=502, detail="regeneration disabled") from error
+        if status != 202 or not isinstance(body.get("job_id"), int):
+            detail = body.get("detail")
+            if status in {404, 409, 422}:
+                raise HTTPException(
+                    status_code=status,
+                    detail=detail if isinstance(detail, str) else "regeneration failed",
+                )
+            raise HTTPException(status_code=502, detail="regeneration disabled")
+        return JSONResponse(status_code=202, content=body)
+
+    @app.get("/api/review-jobs/{job_id}")
+    def review_job(
+        job_id: int,
+        username: str = Depends(current_username),
+    ) -> JSONResponse:
+        del username
+        if review_client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="review_regeneration_disabled",
+            )
+        try:
+            status, body = review_client.get_job(job_id)
+        except httpx.RequestError as error:
+            raise HTTPException(status_code=502, detail="regeneration disabled") from error
+        if status == 200:
+            return JSONResponse(content=body)
+        if status == 404:
+            raise HTTPException(status_code=404, detail="Review job not found")
+        raise HTTPException(status_code=502, detail="regeneration disabled")
+
     return app
 
 
@@ -534,3 +721,170 @@ def _validate_new_text(new_text: str) -> None:
 def _week_period(raw_date: str) -> str:
     iso = date.fromisoformat(raw_date).isocalendar()
     return f"{iso.year}-W{iso.week:02d}"
+
+
+def _validate_review_kind(kind: str) -> str:
+    if kind not in {"week", "month"}:
+        raise HTTPException(status_code=422, detail="Invalid review kind")
+    return kind
+
+
+def _validate_review_period(kind: str, period: str) -> tuple[str, str]:
+    valid_kind = _validate_review_kind(kind)
+    try:
+        if valid_kind == "week":
+            value = date.fromisoformat(period)
+            if value.weekday() != 6:
+                raise ValueError("Weekly period must start on Sunday")
+        else:
+            if not re.fullmatch(r"\d{4}-\d{2}", period):
+                raise ValueError("Invalid monthly period")
+            date.fromisoformat(f"{period}-01")
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Invalid review period") from error
+    return valid_kind, period
+
+
+def _review_archive_item(record: dict[str, object]) -> dict[str, object]:
+    payload = record.get("payload")
+    counts = payload.get("counts", {}) if isinstance(payload, dict) else {}
+    return {
+        "kind": record["kind"],
+        "period": record["period"],
+        "start_date": record["start_date"],
+        "end_date": record["end_date"],
+        "title": record["title"],
+        "counts": counts if isinstance(counts, dict) else {},
+        "has_image": bool(record.get("image_path")),
+        "language": record["language"],
+        "version": record.get("version", 1),
+        "updated_at": record.get("updated_at"),
+    }
+
+
+def _review_detail_payload(
+    record: dict[str, object], sources: list[dict[str, object]]
+) -> dict[str, object]:
+    source_by_id = {
+        str(source["source_id"]): source
+        for source in sources
+        if source.get("source_type") != "external"
+    }
+    raw_payload = record.get("payload")
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    raw_paragraphs = payload.get("paragraphs", [])
+    paragraphs: list[dict[str, object]] = []
+    if isinstance(raw_paragraphs, list):
+        for raw in raw_paragraphs:
+            if not isinstance(raw, dict) or not isinstance(raw.get("text"), str):
+                continue
+            evidence: list[dict[str, object]] = []
+            refs = raw.get("evidence_refs", [])
+            if isinstance(refs, list):
+                for reference in refs:
+                    source = source_by_id.get(str(reference))
+                    if source is None:
+                        continue
+                    public = _public_evidence(source)
+                    if public is not None:
+                        evidence.append(public)
+            paragraphs.append({"text": raw["text"], "evidence": evidence})
+
+    image = None
+    if record.get("image_path"):
+        image = {
+            "url": f"/api/reviews/{record['kind']}/{record['period']}/image",
+            "alt": record.get("image_alt") or "Generated review poster",
+        }
+    counts = payload.get("counts", {})
+    return {
+        "kind": record["kind"],
+        "period": record["period"],
+        "start_date": record["start_date"],
+        "end_date": record["end_date"],
+        "title": record["title"],
+        "paragraphs": paragraphs,
+        "reflection_question": record["reflection_question"],
+        "safety_note": record.get("safety_note"),
+        "counts": counts if isinstance(counts, dict) else {},
+        "image": image,
+        "language": record["language"],
+        "model": record["model"],
+        "version": record.get("version", 1),
+        "created_at": record.get("created_at"),
+        "updated_at": record.get("updated_at"),
+    }
+
+
+def _public_evidence(source: dict[str, object]) -> dict[str, object] | None:
+    source_id = str(source["source_id"])
+    source_type = str(source["source_type"])
+    if source_type == "diary":
+        match = re.match(r"^diary:(\d{4}-\d{2}-\d{2})T", source_id)
+        if match is None:
+            return None
+        label = str(source.get("label") or match.group(1))
+        return {
+            "id": source_id,
+            "type": "diary",
+            "label": label,
+            "href": f"#journal/{match.group(1)}",
+        }
+    if source_type == "review":
+        match = re.match(r"^review:(week|month):([^:]+)$", source_id)
+        if match is None:
+            return None
+        return {
+            "id": source_id,
+            "type": "review",
+            "label": str(source.get("label") or match.group(2)),
+            "href": f"#reviews/{match.group(1)}/{match.group(2)}",
+        }
+    if source_type == "vault" and source_id.startswith("vault:"):
+        relative = source_id.removeprefix("vault:").split("#", 1)[0]
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            return None
+        return {
+            "id": source_id,
+            "type": "vault",
+            "label": path.as_posix(),
+            "href": None,
+        }
+    return None
+
+
+def _resolve_review_image(root: Path, stored: str, *, expected_stem: str) -> Path:
+    resolved_root = root.resolve()
+    stored_path = Path(stored)
+    filename = stored_path.name
+    legacy_name = f"{expected_stem}.jpg"
+    job_prefix = f"{expected_stem}-job-"
+    job_suffix = filename.removeprefix(job_prefix).removesuffix(".jpg")
+    is_immutable_job_image = (
+        filename.startswith(job_prefix)
+        and filename.endswith(".jpg")
+        and bool(job_suffix)
+        and job_suffix.isdigit()
+    )
+    if filename != legacy_name and not is_immutable_job_image:
+        raise HTTPException(status_code=404, detail="Review image not found")
+    if stored_path.is_absolute():
+        candidate = stored_path.resolve()
+        try:
+            candidate.relative_to(resolved_root)
+        except ValueError:
+            # Bot and web use different absolute mount points in Docker. The
+            # deterministic filename is the cross-container identity.
+            candidate = (resolved_root / filename).resolve()
+    else:
+        if stored_path != Path(filename):
+            raise HTTPException(status_code=404, detail="Review image not found")
+        candidate = (resolved_root / filename).resolve()
+    try:
+        candidate.relative_to(resolved_root)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="Review image not found") from error
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Review image not found")
+    return candidate

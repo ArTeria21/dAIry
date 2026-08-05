@@ -23,13 +23,13 @@ PROMPT_TEXT = (
 
 def _decode_message_content(content: Any) -> str:
     if isinstance(content, str):
-        return content.strip()
+        return content
     if isinstance(content, list):
         parts: list[str] = []
         for item in content:
             if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(str(item.get("text", "")).strip())
-        return " ".join(part for part in parts if part).strip()
+                parts.append(str(item.get("text", "")))
+        return "".join(parts)
     return ""
 
 

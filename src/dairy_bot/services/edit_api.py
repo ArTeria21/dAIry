@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -22,27 +24,43 @@ from dairy_bot.services.note_editing import (
 logger = logging.getLogger(__name__)
 SETTINGS_KEY = web.AppKey("settings", Settings)
 GIT_SERVICE_KEY = web.AppKey("git_service", GitService)
+REVIEW_RUNTIME_KEY = web.AppKey("review_runtime", object)
 
 
-def create_edit_app(settings: Settings, git_service: GitService) -> web.Application:
+def create_edit_app(
+    settings: Settings,
+    git_service: GitService,
+    *,
+    review_runtime: object | None = None,
+) -> web.Application:
     app = web.Application()
     app[SETTINGS_KEY] = settings
     app[GIT_SERVICE_KEY] = git_service
+    if review_runtime is not None:
+        app[REVIEW_RUNTIME_KEY] = review_runtime
     app.router.add_post("/internal/notes/delete", _delete_note)
     app.router.add_post("/internal/notes/replace-text", _replace_text)
+    app.router.add_post(
+        "/internal/reviews/{kind}/{period}/regenerate", _regenerate_review
+    )
+    app.router.add_get("/internal/review-jobs/{job_id}", _review_job)
     return app
 
 
 async def start_edit_api(
     settings: Settings,
     git_service: GitService,
+    *,
+    review_runtime: object | None = None,
 ) -> web.AppRunner | None:
     token = _edit_token(settings)
     if not token:
         logger.info("Edit API disabled because EDIT_API_TOKEN is not set")
         return None
 
-    runner = web.AppRunner(create_edit_app(settings, git_service))
+    runner = web.AppRunner(
+        create_edit_app(settings, git_service, review_runtime=review_runtime)
+    )
     await runner.setup()
     site = web.TCPSite(runner, settings.edit_api_host, settings.edit_api_port)
     await site.start()
@@ -186,3 +204,61 @@ def _edit_token(settings: Settings) -> str:
     if settings.edit_api_token is None:
         return ""
     return settings.edit_api_token.get_secret_value()
+
+
+async def _regenerate_review(request: web.Request) -> web.Response:
+    settings = request.app[SETTINGS_KEY]
+    token = _edit_token(settings)
+    if not token or not _authorized(request, token):
+        return web.json_response({"detail": "Unauthorized"}, status=401)
+    runtime = request.app.get(REVIEW_RUNTIME_KEY)
+    if runtime is None:
+        return web.json_response({"detail": "Reviews disabled"}, status=404)
+    kind = request.match_info["kind"]
+    period = request.match_info["period"]
+    if not _valid_review_period(kind, period):
+        return web.json_response({"detail": "Invalid review period"}, status=422)
+    source_hash = runtime.generation_service.current_source_hash(kind, period)
+    if not source_hash:
+        return web.json_response({"detail": "Review period not found"}, status=404)
+    job = runtime.store.enqueue_regeneration(kind, period, source_hash)
+    return web.json_response(
+        {"job_id": job.job_id, "status": job.status}, status=202
+    )
+
+
+async def _review_job(request: web.Request) -> web.Response:
+    settings = request.app[SETTINGS_KEY]
+    token = _edit_token(settings)
+    if not token or not _authorized(request, token):
+        return web.json_response({"detail": "Unauthorized"}, status=401)
+    runtime = request.app.get(REVIEW_RUNTIME_KEY)
+    if runtime is None:
+        return web.json_response({"detail": "Reviews disabled"}, status=404)
+    try:
+        job_id = int(request.match_info["job_id"])
+    except ValueError:
+        return web.json_response({"detail": "Invalid job id"}, status=422)
+    job = runtime.store.get_job(job_id)
+    if job is None:
+        return web.json_response({"detail": "Review job not found"}, status=404)
+    return web.json_response(
+        {
+            "job_id": job.job_id,
+            "kind": job.kind,
+            "period": job.period,
+            "status": job.status,
+        }
+    )
+
+
+def _valid_review_period(kind: str, period: str) -> bool:
+    try:
+        if kind == "week":
+            return date.fromisoformat(period).weekday() == 6
+        if kind == "month" and re.fullmatch(r"\d{4}-\d{2}", period):
+            date.fromisoformat(f"{period}-01")
+            return True
+    except ValueError:
+        return False
+    return False

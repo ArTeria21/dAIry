@@ -174,7 +174,7 @@ def test_ERR_2_note_enrichment_preserves_user_dataview_mood_topics_fields(tmp_pa
     assert content.index("mood:: productive") < content.index("<!-- dairy:note-enrichment -->")
 
 
-def test_AC_3_note_enrichment_upserts_sqlite_notes_with_embedding_json(tmp_path):
+def test_AC_4_note_enrichment_upserts_metadata_without_embedding_copy(tmp_path):
     path = run(
         storage.append_entry(
             tmp_path,
@@ -185,7 +185,8 @@ def test_AC_3_note_enrichment_upserts_sqlite_notes_with_embedding_json(tmp_path)
     )
     store = EnrichmentStore(tmp_path / "data" / "enrichment.sqlite3")
 
-    run(enrich_daily_note_notes(path, tmp_path, FakeNoteClient(), store))
+    client = FakeNoteClient()
+    run(enrich_daily_note_notes(path, tmp_path, client, store))
 
     rows = store.list_notes()
     assert len(rows) == 1
@@ -198,7 +199,8 @@ def test_AC_3_note_enrichment_upserts_sqlite_notes_with_embedding_json(tmp_path)
     assert row["mood"] == "calm"
     assert row["mood_confidence"] == pytest.approx(0.73)
     assert json.loads(row["topics_json"]) == ["fitness"]
-    assert json.loads(row["embedding"]) == [0.1, 0.2, 0.3]
+    assert "embedding" not in row
+    assert client.embedding_calls == []
 
 
 def test_ERR_1_failed_note_enrichment_leaves_raw_note_unchanged_and_retryable(tmp_path):

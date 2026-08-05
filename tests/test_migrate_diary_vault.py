@@ -353,7 +353,7 @@ habits:
     store = EnrichmentStore(db_path)
     rows = store.list_notes()
     assert [row["id"] for row in rows] == ["2025-03-10T09:52", "2026-01-01T20:50"]
-    assert json.loads(rows[0]["embedding"]) == [0.1, 0.2, 0.3]
+    assert "embedding" not in rows[0]
 
     day = store.get_day("2026-01-01")
     assert day is not None

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -241,6 +241,31 @@ function readViewportTransform(viewport: HTMLElement) {
   };
 }
 
+function readClusterLabelBounds(label: Element) {
+  const x = Number(label.getAttribute("x"));
+  const y = Number(label.getAttribute("y"));
+  const fontSize = Number(label.getAttribute("font-size"));
+  const fontScale = fontSize / 11;
+  const width = (label.textContent?.length ?? 0) * 7 * fontScale;
+  const height = 14 * fontScale;
+
+  return {
+    left: x - width / 2,
+    right: x + width / 2,
+    top: y - height,
+    bottom: y,
+  };
+}
+
+function expectClusterLabelInsideViewport(label: Element) {
+  const bounds = readClusterLabelBounds(label);
+
+  expect(bounds.left).toBeGreaterThanOrEqual(8 - 0.01);
+  expect(bounds.right).toBeLessThanOrEqual(mapViewportRect.width - 8 + 0.01);
+  expect(bounds.top).toBeGreaterThanOrEqual(8 - 0.01);
+  expect(bounds.bottom).toBeLessThanOrEqual(mapViewportRect.height - 8 + 0.01);
+}
+
 function expectedZoomAt(
   current: ReturnType<typeof readViewportTransform>,
   cursorX: number,
@@ -285,8 +310,22 @@ describe("Phase 3 map view", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByLabelText("CLUSTER LEGEND")).toBeInTheDocument();
-    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("h-full");
+    const mapLayout = screen.getByTestId("map-layout");
+    const mapPanel = screen.getByTestId("map-panel");
+    const legend = screen.getByLabelText("CLUSTER LEGEND");
+    const legendRegion = screen.getByTestId("map-legend-region");
+    expect(mapLayout).toHaveClass("lg:grid-cols-[minmax(0,1fr)_360px]");
+    expect(mapPanel).toHaveClass("lg:col-start-1", "lg:row-start-1");
+    expect(legendRegion).toHaveClass("lg:col-span-2", "lg:row-start-2");
+    expect(mapPanel.nextElementSibling).toBe(legendRegion);
+    expect(legend.children[1]).toHaveClass(
+      "grid",
+      "grid-cols-1",
+      "sm:grid-cols-2",
+      "lg:grid-cols-3",
+      "xl:grid-cols-4",
+    );
+    expect(legend.children[1]).not.toHaveClass("overflow-y-auto");
     expect(screen.getByRole("button", { name: "WORK" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "HOME" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: "UNCLUSTERED" })).not.toBeInTheDocument();
@@ -395,12 +434,61 @@ describe("Phase 3 map view", () => {
 
     expect(mapPanel.querySelectorAll("rect")).toHaveLength(0);
     expect(workLabel).toHaveAttribute("fill", "#0d6ea5");
-    expect(workLabel).toHaveAttribute("x", "5%");
-    expect(workLabel).toHaveAttribute("y", "5%");
+    expect(workLabel).toHaveAttribute("x", "32");
+    expect(workLabel).toHaveAttribute("y", "22");
     expect(workLabel).toHaveTextContent("WORK");
     expect(workLabel).toHaveClass("font-plexmono");
     expect(homeLabel).toHaveTextContent("HOME");
     expect(homeLabel).toHaveClass("font-plexmono");
+  });
+
+  it("keeps long cluster labels fully inside the map after zooming and panning", async () => {
+    installFetchMock({
+      map: {
+        ...mapPayload,
+        n_noise: 0,
+        points: [
+          { ...mapPayload.points[0], id: "left", x: 0, y: 1, cluster_id: 0 },
+          { ...mapPayload.points[0], id: "top", x: 0.5, y: 1, cluster_id: 1 },
+          { ...mapPayload.points[0], id: "right", x: 1, y: 1, cluster_id: 2 },
+          { ...mapPayload.points[0], id: "bottom", x: 0.5, y: 0, cluster_id: 3 },
+        ],
+        clusters: [
+          { id: 0, label: "left edge cluster", size: 1, dominant_topics: ["left"] },
+          { id: 1, label: "top edge cluster", size: 1, dominant_topics: ["top"] },
+          { id: 2, label: "right edge cluster", size: 1, dominant_topics: ["right"] },
+          {
+            id: 3,
+            label:
+              "bottom edge cluster with an intentionally very long name that remains completely readable on every viewport",
+            size: 1,
+            dominant_topics: ["bottom"],
+          },
+        ],
+      },
+    });
+
+    await renderAuthenticatedMap();
+    const viewport = await screen.findByTestId("map-viewport");
+    const labels = await Promise.all(
+      [0, 1, 2, 3].map((clusterId) => screen.findByTestId(`cluster-label-${clusterId}`)),
+    );
+
+    labels.forEach(expectClusterLabelInsideViewport);
+    expect(Number(labels[3].getAttribute("font-size"))).toBeLessThan(11);
+
+    for (let index = 0; index < 4; index += 1) {
+      fireEvent.wheel(viewport, { deltaY: -240, clientX: 320, clientY: 240 });
+    }
+    fireEvent.pointerDown(viewport, { pointerId: 1, button: 0, buttons: 1, clientX: 320, clientY: 240 });
+    fireEvent.pointerMove(viewport, { pointerId: 1, buttons: 1, clientX: 340, clientY: 260 });
+    fireEvent.pointerUp(viewport, { pointerId: 1, button: 0, buttons: 0, clientX: 340, clientY: 260 });
+
+    for (const clusterId of [0, 1, 2, 3]) {
+      const label = screen.getByTestId(`cluster-label-${clusterId}`);
+      expect(label).toBeInTheDocument();
+      expectClusterLabelInsideViewport(label);
+    }
   });
 
   it("skips cluster labels without visible finite points", async () => {
@@ -457,9 +545,10 @@ describe("Phase 3 map view", () => {
       map: {
         ...mapPayload,
         points: [
-          { ...mapPayload.points[0], id: "anchor", x: 0, y: 0, cluster_id: -1 },
-          { ...mapPayload.points[0], id: "a1", x: 0.45, y: 0.5, cluster_id: 0 },
-          { ...mapPayload.points[1], id: "b1", x: 0.55, y: 0.5, cluster_id: 1 },
+          { ...mapPayload.points[0], id: "anchor-left", x: 0, y: 0, cluster_id: -1 },
+          { ...mapPayload.points[0], id: "anchor-right", x: 1, y: 0, cluster_id: -1 },
+          { ...mapPayload.points[0], id: "a1", x: 0.48, y: 0.5, cluster_id: 0 },
+          { ...mapPayload.points[1], id: "b1", x: 0.52, y: 0.5, cluster_id: 1 },
         ],
         clusters: [
           { id: 0, label: "alpha", size: 1, dominant_topics: ["work"] },
@@ -554,7 +643,7 @@ describe("Phase 3 map view", () => {
     expect(noisePoint.style.getPropertyValue("--point-color")).toBe(moodPalette.calm);
   });
 
-  it("switching color modes resets highlight without changing the legend frame height", async () => {
+  it("switching color modes resets highlight while keeping the expanded legend grid", async () => {
     installFetchMock();
 
     await renderAuthenticatedMap();
@@ -563,11 +652,11 @@ describe("Phase 3 map view", () => {
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       topicMutedColor,
     );
-    expect(screen.getByLabelText("CLUSTER LEGEND")).toHaveClass("h-full");
+    expect(screen.getByLabelText("CLUSTER LEGEND").children[1]).toHaveClass("grid");
 
     await userEvent.click(screen.getByRole("button", { name: "MOOD" }));
 
-    expect(screen.getByLabelText("MOOD LEGEND")).toHaveClass("h-full");
+    expect(screen.getByLabelText("MOOD LEGEND").children[1]).toHaveClass("grid");
     expect(screen.getByRole("button", { name: "CALM" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "NOTE 2" }).style.getPropertyValue("--point-color")).toBe(
       moodPalette.joy,
@@ -897,6 +986,52 @@ describe("Phase 3 map view", () => {
 
     expect(await screen.findByText("NO NOTES TO MAP")).toBeInTheDocument();
     expect(screen.queryAllByRole("button", { name: /^NOTE \d+$/ })).toHaveLength(0);
+  });
+
+  it("AC-7: shows semantic indexing and retries the map after exactly 10 seconds", async () => {
+    let mapCalls = 0;
+    let retry: (() => void) | null = null;
+    const nativeSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((handler, delay, ...args) => {
+      if (delay === 10_000) {
+        retry = typeof handler === "function" ? handler : () => undefined;
+        return 99 as ReturnType<typeof setTimeout>;
+      }
+      return nativeSetTimeout(handler, delay, ...args);
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (url.endsWith("/api/auth/me")) {
+        return jsonResponse({ username: "artem" });
+      }
+      if (url.endsWith("/api/map")) {
+        mapCalls += 1;
+        return mapCalls === 1
+          ? jsonResponse({ detail: "semantic_index_building" }, 503)
+          : jsonResponse(mapPayload);
+      }
+      return jsonResponse({ detail: `Unexpected request: ${url}` }, 500);
+    });
+
+    await renderAuthenticatedMap();
+
+    expect(await screen.findByText("SEMANTIC INDEX IS BEING BUILT")).toBeInTheDocument();
+    expect(mapCalls).toBe(1);
+    expect(retry).not.toBeNull();
+
+    await act(async () => {
+      retry?.();
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole("button", { name: "NOTE 1" })).toBeInTheDocument();
+    expect(mapCalls).toBe(2);
+    expect(screen.queryByText("SEMANTIC INDEX IS BEING BUILT")).not.toBeInTheDocument();
   });
 
   it("missing notes show a sanitized unavailable state", async () => {

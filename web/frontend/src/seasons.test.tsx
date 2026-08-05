@@ -279,6 +279,21 @@ describe("Sprint 5 seasons view", () => {
     expect(screen.queryAllByTestId(/^topic-sparkline-/)).toHaveLength(0);
   });
 
+  it("lets mood and topic legends grow with the page instead of scrolling internally", async () => {
+    installFetchMock();
+
+    await renderAuthenticatedSeasons();
+
+    for (const label of ["MOOD LEGEND", "TOPIC LEGEND"]) {
+      const legend = await screen.findByLabelText(label);
+      const items = legend.children[1];
+
+      expect(legend).not.toHaveClass("h-[84px]");
+      expect(items).toHaveClass("flex", "flex-wrap");
+      expect(items).not.toHaveClass("max-h-[68px]", "overflow-y-auto");
+    }
+  });
+
   it("selecting a stream topic highlights the layer and filters the calendar", async () => {
     installFetchMock();
 

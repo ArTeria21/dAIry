@@ -253,7 +253,7 @@ class AnalysisService:
 
     def get_map(self) -> MapSnapshot:
         notes = self.store.list_notes()
-        signature = note_set_signature(notes, self.store.note_content_hashes())
+        signature = self._signature(notes)
         cached = self.cache.load_snapshot(signature)
         if cached is not None:
             return cached
@@ -262,7 +262,7 @@ class AnalysisService:
     def rebuild(self) -> RebuildResult:
         notes = self.store.list_notes()
         snapshot = self._recompute(
-            notes, note_set_signature(notes, self.store.note_content_hashes())
+            notes, self._signature(notes)
         )
         return RebuildResult(
             signature=snapshot.signature,
@@ -271,6 +271,17 @@ class AnalysisService:
             n_clusters=len(snapshot.clusters),
             n_noise=snapshot.n_noise,
         )
+
+    def _signature(self, notes: list[NoteRecord]) -> str:
+        hashes = self.store.note_content_hashes()
+        semantic_signature = getattr(self.store, "semantic_signature", None)
+        if callable(semantic_signature):
+            semantic = str(semantic_signature())
+            hashes = {
+                note.id: f"{hashes.get(note.id, '')}|semantic={semantic}"
+                for note in notes
+            }
+        return note_set_signature(notes, hashes)
 
     def _recompute(self, notes: list[NoteRecord], signature: str) -> MapSnapshot:
         computed_at = self.now().astimezone(timezone.utc).isoformat()
@@ -416,7 +427,6 @@ class OpenRouterClusterLabeler:
         api_key: str | None = None,
         base_url: str = "https://openrouter.ai/api/v1",
         complete: Callable[[str, str], str] | None = None,
-        max_gists: int = 8,
         timeout: float = OPENROUTER_LABEL_TIMEOUT_SECONDS,
         language: str = "EN",
     ) -> None:
@@ -424,7 +434,6 @@ class OpenRouterClusterLabeler:
         self.api_key = api_key
         self.base_url = base_url
         self.complete = complete or self._complete_with_openrouter
-        self.max_gists = max_gists
         self.timeout = timeout
         self.language_name = LANGUAGE_DISPLAY_NAMES.get(
             language.upper(), LANGUAGE_DISPLAY_NAMES["EN"]
@@ -435,9 +444,9 @@ class OpenRouterClusterLabeler:
         labels: dict[int, str] = {}
         for cluster_id, cluster_notes in clusters.items():
             try:
-                labels[cluster_id] = _clean_cluster_label(
-                    self.complete(self.model_name, self._prompt(cluster_notes)),
-                    fallback=f"Cluster {cluster_id}",
+                labels[cluster_id] = self.complete(
+                    self.model_name,
+                    self._prompt(cluster_notes),
                 )
             except Exception:
                 LOGGER.warning(
@@ -459,9 +468,7 @@ class OpenRouterClusterLabeler:
                 raw = self.complete(
                     self.model_name, self._description_prompt(cluster_notes)
                 )
-                descriptions[cluster_id] = " ".join(raw.split()).strip(" \"'`") or (
-                    _static_cluster_description(cluster_notes)
-                )
+                descriptions[cluster_id] = raw
             except Exception:
                 LOGGER.warning(
                     "OpenRouter cluster description failed for cluster %s; "
@@ -473,16 +480,14 @@ class OpenRouterClusterLabeler:
         return descriptions
 
     def _prompt(self, notes: list[NoteRecord]) -> str:
-        sample = notes[: self.max_gists]
-        gists = "\n".join(f"- {note.gist}" for note in sample)
+        gists = "\n".join(f"- {note.gist}" for note in notes)
         return (
             f"Name this journal cluster in 2-4 words in {self.language_name}."
             f"\nGists:\n{gists}"
         )
 
     def _description_prompt(self, notes: list[NoteRecord]) -> str:
-        sample = notes[: self.max_gists]
-        gists = "\n".join(f"- {note.gist}" for note in sample)
+        gists = "\n".join(f"- {note.gist}" for note in notes)
         return (
             "Summarize what unites this personal journal cluster in 1-2 plain "
             f"{self.language_name} sentences. Return only the summary."
@@ -509,7 +514,8 @@ class OpenRouterClusterLabeler:
                 {"role": "user", "content": prompt},
             ],
         )
-        return completion.choices[0].message.content or "Cluster"
+        content = completion.choices[0].message.content
+        return "" if content is None else content
 
 
 def note_set_signature(
@@ -583,8 +589,10 @@ def _label_clusters_with_fallback(
         LOGGER.warning("Cluster labeler failed; using static labels", exc_info=True)
         labels = {}
     return {
-        cluster_id: labels.get(cluster_id) or fallback_labels.get(
-            cluster_id, f"Cluster {cluster_id}"
+        cluster_id: (
+            labels[cluster_id]
+            if cluster_id in labels
+            else fallback_labels.get(cluster_id, f"Cluster {cluster_id}")
         )
         for cluster_id in clusters
     }
@@ -606,7 +614,11 @@ def _describe_clusters_with_fallback(
                 "Cluster describer failed; using static descriptions", exc_info=True
             )
     return {
-        cluster_id: descriptions.get(cluster_id) or fallback.get(cluster_id, "")
+        cluster_id: (
+            descriptions[cluster_id]
+            if cluster_id in descriptions
+            else fallback.get(cluster_id, "")
+        )
         for cluster_id in clusters
     }
 
@@ -635,12 +647,3 @@ def _cluster_from_row(row: sqlite3.Row) -> ClusterSummary:
         ],
         description=str(row["description"]),
     )
-
-
-def _clean_cluster_label(raw: str, *, fallback: str = "Cluster") -> str:
-    label = " ".join(raw.replace("\n", " ").split())
-    label = label.strip(" \"'`.,:;")
-    words = label.split()
-    if len(words) > 4:
-        label = " ".join(words[:4])
-    return label or fallback

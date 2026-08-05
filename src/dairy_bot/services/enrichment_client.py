@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -14,7 +13,6 @@ from dairy_bot.services.enrichment_schemas import DayEnrichment, NoteEnrichment,
 STRUCTURED_OUTPUT_MAX_TOKENS = 2_000
 OPENROUTER_STRUCTURED_EXTRA_BODY = {
     "provider": {"require_parameters": True},
-    "plugins": [{"id": "response-healing"}],
 }
 
 
@@ -67,14 +65,6 @@ class OpenRouterEnrichmentClient:
         )
         return DayEnrichment.model_validate(raw)
 
-    async def embed_note(self, text: str) -> list[float]:
-        response = await self.client.embeddings.create(
-            model=self.settings.embedding_model_name,
-            input=text,
-            encoding_format="float",
-        )
-        return list(response.data[0].embedding)
-
     async def close(self) -> None:
         await self.client.close()
 
@@ -125,19 +115,5 @@ def _response_format(schema_model: type[BaseModel], name: str) -> dict[str, Any]
             "schema": to_strict_json_schema(schema_model),
         },
     }
-
-
-def _parse_json(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = [
-            line
-            for line in text.splitlines()
-            if not line.strip().startswith("```")
-        ]
-        text = "\n".join(lines).strip()
-    return json.loads(text)
-
-
 def allowed_topic_values() -> list[str]:
     return [topic.value for topic in Topic]

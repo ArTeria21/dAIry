@@ -60,7 +60,6 @@ ALLOWED_TAG_SET = frozenset(TAG_TAXONOMY)
 TOC_STATE_FILENAME = ".toc_index.json"
 DAILY_NOTE_PATTERN = re.compile(r"^(\d{4})/(\d{2})/(\d{4}-\d{2}-\d{2})\.md$")
 _DATE_HEADER_RE = re.compile(r"^#\s+\d{4}-\d{2}-\d{2}\s*$")
-MAX_NOTE_CONTENT_FOR_LLM = 8000
 TOC_SUMMARY_ATTEMPTS = 2
 TOC_SUMMARY_MAX_TOKENS = 500
 _MONTH_NAMES = {i: calendar.month_name[i] for i in range(1, 13)}
@@ -146,29 +145,6 @@ def _content_hash(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Note cleanup before LLM processing
-# ---------------------------------------------------------------------------
-
-
-def _clean_for_llm(text: str, is_daily: bool) -> str:
-    body = _strip_frontmatter_text(text)
-    if is_daily:
-        lines = body.splitlines()
-        idx = 0
-        while idx < len(lines) and not lines[idx].strip():
-            idx += 1
-        if idx < len(lines) and _DATE_HEADER_RE.match(lines[idx].strip()):
-            idx += 1
-        if idx < len(lines) and _looks_like_nav_line(lines[idx]):
-            idx += 1
-        body = "\n".join(lines[idx:])
-    body = body.strip()
-    if len(body) > MAX_NOTE_CONTENT_FOR_LLM:
-        body = body[:MAX_NOTE_CONTENT_FOR_LLM] + "\n[truncated]"
-    return body
-
-
-# ---------------------------------------------------------------------------
 # File discovery
 # ---------------------------------------------------------------------------
 
@@ -249,8 +225,8 @@ def _build_system_prompt(max_tags: int, language: str = "EN") -> str:
     )
 
 
-def _build_user_prompt(cleaned_text: str, rel_path: str) -> str:
-    return f"Note path: {rel_path}\n\nNote content:\n{cleaned_text}"
+def _build_user_prompt(raw_text: str, rel_path: str) -> str:
+    return f"Note path: {rel_path}\n\nNote content:\n{raw_text}"
 
 
 def _build_response_format(max_tags: int, language: str = "EN") -> dict[str, Any]:
@@ -286,13 +262,8 @@ def _build_response_format(max_tags: int, language: str = "EN") -> dict[str, Any
 
 
 def _parse_llm_json(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        lines = [ln for ln in lines if not ln.strip().startswith("```")]
-        text = "\n".join(lines).strip()
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise TocLLMResponseError(
             "TOC LLM returned invalid JSON "
@@ -303,9 +274,28 @@ def _parse_llm_json(raw: str) -> dict[str, Any]:
     return parsed
 
 
+def _validate_llm_result(parsed: dict[str, Any], max_tags: int) -> None:
+    if set(parsed) != {"summary", "tags"}:
+        raise TocLLMResponseError(
+            "TOC LLM response does not match the declared schema"
+        )
+    summary = parsed["summary"]
+    tags = parsed["tags"]
+    if not isinstance(summary, str) or not isinstance(tags, list):
+        raise TocLLMResponseError(
+            "TOC LLM response does not match the declared schema"
+        )
+    if len(tags) > max_tags or any(
+        not isinstance(tag, str) or tag not in ALLOWED_TAG_SET for tag in tags
+    ):
+        raise TocLLMResponseError(
+            "TOC LLM response does not match the declared schema"
+        )
+
+
 async def _summarize_note(
     client: AsyncOpenAI,
-    cleaned_text: str,
+    raw_text: str,
     rel_path: str,
     model_name: str,
     max_tags: int,
@@ -323,15 +313,17 @@ async def _summarize_note(
             model=model_name,
             temperature=0.2,
             max_tokens=TOC_SUMMARY_MAX_TOKENS,
+            provider={"require_parameters": True},
             response_format=_build_response_format(max_tags, language),
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": _build_user_prompt(cleaned_text, rel_path)},
+                {"role": "user", "content": _build_user_prompt(raw_text, rel_path)},
             ],
         )
         raw = completion.choices[0].message.content or ""
         try:
             parsed = _parse_llm_json(raw)
+            _validate_llm_result(parsed, max_tags)
             break
         except TocLLMResponseError as exc:
             last_error = exc
@@ -350,12 +342,10 @@ async def _summarize_note(
             raise last_error
         raise TocLLMResponseError("TOC LLM did not return a usable response")
 
-    summary = str(parsed.get("summary", "")).strip()
-    raw_tags = parsed.get("tags", [])
-    if not isinstance(raw_tags, list):
-        raw_tags = []
-    tags = [t for t in raw_tags if t in ALLOWED_TAG_SET][:max_tags]
-    return {"summary": summary, "tags": tags}
+    return {
+        "summary": parsed["summary"],
+        "tags": parsed["tags"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +542,8 @@ async def reconcile_toc(
     for rel_path in files_to_remove:
         state.pop(rel_path, None)
 
+    state_changed = bool(files_to_remove or state_touched)
+
     # Call the LLM for changed files ---------------------------------------
     if files_to_index:
         client = AsyncOpenAI(
@@ -563,13 +555,8 @@ async def reconcile_toc(
                 try:
                     async with aiofiles.open(abs_path, "r", encoding="utf-8") as f:
                         content = await f.read()
-                    is_daily = _is_daily_note(rel_path)
-                    cleaned = _clean_for_llm(content, is_daily)
-                    if not cleaned.strip():
-                        state.pop(rel_path, None)
-                        continue
                     result = await _summarize_note(
-                        client, cleaned, rel_path, model_name, max_tags, language
+                        client, content, rel_path, model_name, max_tags, language
                     )
                     state[rel_path] = {
                         "content_hash": _content_hash(content),
@@ -578,6 +565,7 @@ async def reconcile_toc(
                         "tags": result["tags"],
                         "last_indexed_at": datetime.now().isoformat(),
                     }
+                    state_changed = True
                 except TocLLMResponseError as exc:
                     logger.warning("Failed to index %s: %s", rel_path, exc)
                 except Exception:
@@ -587,6 +575,9 @@ async def reconcile_toc(
                 await client.close()
             except Exception:
                 pass
+
+    if not state_changed:
+        return []
 
     # Render and save ------------------------------------------------------
     toc_content = _render_toc(state, extra_dirs, toc_filename, str(settings.timezone))

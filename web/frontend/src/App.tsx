@@ -4,6 +4,7 @@ import { chromeTextClass, readingTextClass } from "./design/theme";
 import { JournalView } from "./journal/JournalView";
 import { MapView } from "./map/MapView";
 import { MemoryView } from "./memory/MemoryView";
+import { ReviewsView } from "./reviews/ReviewsView";
 import { SeasonsView } from "./seasons/SeasonsView";
 import { getCurrentUser, login, type SessionUser } from "./services/auth";
 import { Button, Card, Input, Tag } from "./ui/primitives";
@@ -105,7 +106,10 @@ function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
 
 function AuthenticatedShell({ user }: { user: SessionUser }) {
   const [route, setRoute] = useState<RouteState>(() => routeFromHash(window.location.hash));
-  const routes = useMemo(() => ["journal", "map", "seasons", "memory"] as const, []);
+  const routes = useMemo(
+    () => ["journal", "map", "seasons", "memory", "reviews"] as const,
+    [],
+  );
 
   useEffect(() => {
     function handleHashChange() {
@@ -117,9 +121,9 @@ function AuthenticatedShell({ user }: { user: SessionUser }) {
 
   return (
     <div className="mx-auto grid min-h-screen max-w-[1200px] grid-rows-[auto_1fr] gap-12 px-6 py-6">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-wrap items-center justify-between gap-4">
         <div className="font-gerstnerprogramm text-sm font-medium">dAIry</div>
-        <nav className="flex gap-6">
+        <nav aria-label="PRIMARY" className="flex flex-wrap gap-4 sm:gap-6">
           {routes.map((item) => (
             <a
               className={`${chromeTextClass} text-[11px] ${route.key === item ? "text-signal-orange" : "text-slate"}`}
@@ -156,6 +160,10 @@ function AuthenticatedShell({ user }: { user: SessionUser }) {
           <div className="mt-6">
             <MemoryView />
           </div>
+        ) : route.key === "reviews" ? (
+          <div className="mt-6">
+            <ReviewsView kind={route.reviewKind ?? "week"} period={route.param} />
+          </div>
         ) : (
           <p className={`${readingTextClass} mt-4 max-w-xl text-sm leading-6 text-slate`}>
             {routeDescription(route.key)}
@@ -166,14 +174,25 @@ function AuthenticatedShell({ user }: { user: SessionUser }) {
   );
 }
 
-type RouteKey = "journal" | "map" | "seasons" | "memory";
-type RouteState = { key: RouteKey; param?: string };
+type RouteKey = "journal" | "map" | "seasons" | "memory" | "reviews";
+type RouteState = { key: RouteKey; param?: string; reviewKind?: "week" | "month" };
 
 function routeFromHash(hash: string): RouteState {
   const normalized = hash.replace("#", "").split("?")[0];
   const [key, param] = normalized.split("/");
   if (key === "journal") {
     return isIsoDate(param) ? { key, param } : { key };
+  }
+  if (key === "reviews") {
+    const [, rawKind, rawPeriod] = normalized.split("/");
+    const reviewKind = rawKind === "month" ? "month" : "week";
+    const validPeriod =
+      reviewKind === "week" ? isIsoDate(rawPeriod) : isIsoMonth(rawPeriod);
+    return {
+      key,
+      reviewKind,
+      ...(validPeriod ? { param: rawPeriod } : {}),
+    };
   }
   if (key === "seasons" || key === "memory" || key === "map") {
     return { key };
@@ -187,6 +206,7 @@ function routeLabel(route: RouteKey): string {
     map: "MAP",
     seasons: "SEASONS",
     memory: "MEMORY",
+    reviews: "REVIEWS",
   }[route];
 }
 
@@ -196,6 +216,7 @@ function routeDescription(route: RouteKey): string {
     map: "Embedding map foundation.",
     seasons: "Calendar and topic timeline foundation.",
     memory: "Resurfacing foundation.",
+    reviews: "Weekly and monthly diary reviews.",
   }[route];
 }
 
@@ -205,6 +226,7 @@ function routeTitle(route: RouteKey): string {
     map: "Embedding map",
     seasons: "Emotional seasons",
     memory: "Memory resurfacing",
+    reviews: "Reviews",
   }[route];
 }
 
@@ -214,4 +236,12 @@ function isIsoDate(value: string | undefined): value is string {
   }
   const parsed = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function isIsoMonth(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(`${value}-01T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 7) === value;
 }

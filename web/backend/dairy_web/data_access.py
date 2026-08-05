@@ -36,11 +36,24 @@ class DayRecord:
     facts: dict[str, bool | int | None]
 
 
+class SemanticIndexBuilding(RuntimeError):
+    """The bot has not atomically published the shared semantic index yet."""
+
+
 class EnrichmentReadStore:
     """Read-only adapter for the bot-owned enrichment SQLite database."""
 
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(
+        self,
+        db_path: Path | str,
+        embeddings_db_path: Path | str | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
+        self.embeddings_db_path = (
+            Path(embeddings_db_path)
+            if embeddings_db_path is not None
+            else self.db_path.with_name("embeddings.sqlite3")
+        )
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -52,9 +65,19 @@ class EnrichmentReadStore:
             conn.close()
 
     def list_notes(self) -> list[NoteRecord]:
+        _, vectors = self._published_vectors()
         with self.connect() as conn:
             rows = conn.execute("SELECT * FROM notes ORDER BY id").fetchall()
-        return [_note_from_row(row) for row in rows]
+        hashes = self.note_content_hashes()
+        notes: list[NoteRecord] = []
+        for row in rows:
+            note_id = str(row["id"])
+            vector = vectors.get(f"diary:{note_id}")
+            content_hash = hashes.get(note_id)
+            if vector is None or content_hash is None or vector[0] != content_hash:
+                continue
+            notes.append(_note_from_row(row, vector[1]))
+        return notes
 
     def note_content_hashes(self) -> dict[str, str]:
         with self.connect() as conn:
@@ -77,7 +100,27 @@ class EnrichmentReadStore:
                 "SELECT * FROM notes WHERE id = ?",
                 (note_id,),
             ).fetchone()
-        return None if row is None else _note_from_row(row)
+        if row is None:
+            return None
+        embedding: list[float] = []
+        try:
+            _, vectors = self._published_vectors()
+            vector = vectors.get(f"diary:{note_id}")
+            content_hash = self.note_content_hashes().get(note_id)
+            if vector is not None and vector[0] == content_hash:
+                embedding = vector[1]
+        except SemanticIndexBuilding:
+            pass
+        return _note_from_row(row, embedding)
+
+    def semantic_signature(self) -> str:
+        state = self._semantic_state()
+        if state["status"] != "ready":
+            raise SemanticIndexBuilding()
+        return "|".join(
+            str(state[key])
+            for key in ("corpus_hash", "model", "recipe_version")
+        )
 
     def list_days(self) -> list[DayRecord]:
         with self.connect() as conn:
@@ -96,8 +139,112 @@ class EnrichmentReadStore:
         path = quote(str(self.db_path.resolve()), safe="/:")
         return f"file:{path}?mode=ro"
 
+    @contextmanager
+    def _semantic_connect(self) -> Iterator[sqlite3.Connection]:
+        path = quote(str(self.embeddings_db_path.resolve()), safe="/:")
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        except sqlite3.OperationalError as exc:
+            raise SemanticIndexBuilding() from exc
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
 
-def _note_from_row(row: sqlite3.Row) -> NoteRecord:
+    def _semantic_state(self) -> dict[str, object]:
+        try:
+            with self._semantic_connect() as conn:
+                conn.execute("BEGIN")
+                state = self._active_semantic_state(conn)
+        except sqlite3.OperationalError as exc:
+            raise SemanticIndexBuilding() from exc
+        return state
+
+    def _published_vectors(
+        self,
+    ) -> tuple[dict[str, object], dict[str, tuple[str, list[float]]]]:
+        try:
+            with self._semantic_connect() as conn:
+                conn.execute("BEGIN")
+                state = self._active_semantic_state(conn)
+                if state["generation_id"] is None:
+                    rows = conn.execute(
+                        """
+                        SELECT document_id, content_hash, embedding
+                        FROM semantic_embeddings
+                        WHERE model = ? AND recipe_version = ?
+                        """,
+                        (state["model"], state["recipe_version"]),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT document_id, content_hash, embedding
+                        FROM semantic_vectors
+                        WHERE generation_id = ?
+                        ORDER BY document_id
+                        """,
+                        (state["generation_id"],),
+                    ).fetchall()
+        except sqlite3.OperationalError as exc:
+            raise SemanticIndexBuilding() from exc
+        vectors = {
+            str(row["document_id"]): (
+                str(row["content_hash"]),
+                [float(value) for value in json.loads(str(row["embedding"]))],
+            )
+            for row in rows
+        }
+        return state, vectors
+
+    @staticmethod
+    def _active_semantic_state(conn: sqlite3.Connection) -> dict[str, object]:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(semantic_index_state)")
+        }
+        if "active_generation_id" not in columns:
+            row = conn.execute(
+                "SELECT * FROM semantic_index_state WHERE singleton = 1"
+            ).fetchone()
+            if row is None or row["status"] != "ready":
+                raise SemanticIndexBuilding()
+            return {
+                "status": "ready",
+                "corpus_hash": str(row["corpus_hash"]),
+                "model": str(row["model"]),
+                "recipe_version": str(row["recipe_version"]),
+                "generation_id": None,
+            }
+
+        pointer = conn.execute(
+            """
+            SELECT active_generation_id
+            FROM semantic_index_state WHERE singleton = 1
+            """
+        ).fetchone()
+        if pointer is None or pointer["active_generation_id"] is None:
+            raise SemanticIndexBuilding()
+        generation = conn.execute(
+            """
+            SELECT generation_id, status, corpus_hash, model, recipe_version
+            FROM semantic_generations WHERE generation_id = ?
+            """,
+            (pointer["active_generation_id"],),
+        ).fetchone()
+        if generation is None or generation["status"] != "ready":
+            raise SemanticIndexBuilding()
+        return {
+            "status": "ready",
+            "corpus_hash": str(generation["corpus_hash"]),
+            "model": str(generation["model"]),
+            "recipe_version": str(generation["recipe_version"]),
+            "generation_id": int(generation["generation_id"]),
+        }
+
+
+def _note_from_row(row: sqlite3.Row, embedding: list[float]) -> NoteRecord:
     return NoteRecord(
         id=str(row["id"]),
         date=str(row["date"]),
@@ -108,7 +255,7 @@ def _note_from_row(row: sqlite3.Row) -> NoteRecord:
         mood_confidence=float(row["mood_confidence"]),
         topics=_json_list(row["topics_json"]),
         mood_evidence=str(row["mood_evidence"]),
-        embedding=[float(value) for value in json.loads(row["embedding"])],
+        embedding=list(embedding),
     )
 
 

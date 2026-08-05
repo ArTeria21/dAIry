@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -540,43 +541,37 @@ def test_EC_2_analysis_rejects_mixed_embedding_dimensions(tmp_path):
         service.get_map()
 
 
-def test_AC_4_openrouter_cluster_labeler_uses_member_gists_for_short_labels():
+def test_AC_4_openrouter_cluster_labeler_sends_every_member_gist_to_both_prompts():
     calls: list[tuple[str, str]] = []
+    responses = iter(["Language Practice", "A shared description."])
 
     def complete(model: str, prompt: str) -> str:
         calls.append((model, prompt))
-        return "Language Practice"
+        return next(responses)
 
     labeler = OpenRouterClusterLabeler(
         model_name="openrouter/test-model",
         complete=complete,
-        max_gists=2,
     )
+    members = notes(12)
 
-    labels = labeler.label_clusters(
-        {
-            8: [
-                note("2026-06-16T21:55"),
-                note("2026-06-17T10:15"),
-                note("2026-06-18T09:00"),
-            ]
-        }
-    )
+    labels = labeler.label_clusters({8: members})
+    descriptions = labeler.describe_clusters({8: members})
 
     assert labels == {8: "Language Practice"}
+    assert descriptions == {8: "A shared description."}
     assert labeler.timeout == 20.0
-    assert calls == [
-        (
-            "openrouter/test-model",
-            "Name this journal cluster in 2-4 words in English.\n"
-            "Gists:\n"
-            "- Gist for 2026-06-16T21:55\n"
-            "- Gist for 2026-06-17T10:15",
-        )
+    assert [model for model, _ in calls] == [
+        "openrouter/test-model",
+        "openrouter/test-model",
     ]
+    assert len(calls) == 2
+    for _, prompt in calls:
+        assert prompt.count("- Gist for ") == len(members)
+        assert all(f"- {member.gist}" in prompt for member in members)
 
 
-def test_E5_openrouter_cluster_labeler_falls_back_and_logs_warning(caplog):
+def test_E5_openrouter_cluster_labeler_falls_back_only_on_provider_exception(caplog):
     caplog.set_level("WARNING", logger="dairy_web.analysis")
 
     def complete(model: str, prompt: str) -> str:
@@ -587,28 +582,86 @@ def test_E5_openrouter_cluster_labeler_falls_back_and_logs_warning(caplog):
         complete=complete,
     )
 
-    labels = labeler.label_clusters(
-        {
-            8: [
-                note("2026-06-16T21:55", topics=["learning", "reflection"]),
-                note("2026-06-17T10:15", topics=["learning"]),
-            ]
-        }
-    )
+    clusters = {
+        8: [
+            note("2026-06-16T21:55", topics=["learning", "reflection"]),
+            note("2026-06-17T10:15", topics=["learning"]),
+        ]
+    }
+    labels = labeler.label_clusters(clusters)
+    descriptions = labeler.describe_clusters(clusters)
 
     assert labels == {8: "learning / reflection"}
+    assert descriptions == {8: "2 notes about learning, reflection."}
     assert "OpenRouter cluster label failed" in caplog.text
+    assert "OpenRouter cluster description failed" in caplog.text
 
 
-def test_E6_openrouter_cluster_labeler_uses_cluster_id_for_empty_labels():
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "  \"A deliberately very long label, with punctuation!\nAnd a second line.\"  ",
+        "",
+    ],
+)
+def test_AC_4_openrouter_cluster_labeler_preserves_exact_llm_text(raw):
     labeler = OpenRouterClusterLabeler(
         model_name="openrouter/test-model",
-        complete=lambda model, prompt: "   \n . ",
+        complete=lambda model, prompt: raw,
+    )
+    clusters = {8: [note("2026-06-16T21:55")]}
+
+    labels = labeler.label_clusters(clusters)
+    descriptions = labeler.describe_clusters(clusters)
+
+    assert labels == {8: raw}
+    assert descriptions == {8: raw}
+
+
+def test_AC_4_openrouter_transport_preserves_empty_completion(monkeypatch):
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=""))]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    labeler = OpenRouterClusterLabeler(
+        model_name="openrouter/test-model",
+        api_key="test-key",
+    )
+    clusters = {8: [note("2026-06-16T21:55")]}
+
+    assert labeler.label_clusters(clusters) == {8: ""}
+    assert labeler.describe_clusters(clusters) == {8: ""}
+
+
+def test_AC_4_analysis_preserves_empty_llm_label_and_description(tmp_path):
+    labeler = OpenRouterClusterLabeler(
+        model_name="openrouter/test-model",
+        complete=lambda model, prompt: "",
+    )
+    service = AnalysisService(
+        store=FakeStore(notes(15)),
+        cache=AnalysisCache(tmp_path / "analysis_cache.sqlite3"),
+        projector=FakeProjector(),
+        reducer=FakeReducer(),
+        clusterer=FakeClusterer([8] * 15),
+        labeler=labeler,
+        now=fixed_now,
     )
 
-    labels = labeler.label_clusters({8: [note("2026-06-16T21:55")]})
+    snapshot = service.get_map()
 
-    assert labels == {8: "Cluster 8"}
+    assert [(cluster.label, cluster.description) for cluster in snapshot.clusters] == [
+        ("", "")
+    ]
 
 
 @pytest.mark.slow

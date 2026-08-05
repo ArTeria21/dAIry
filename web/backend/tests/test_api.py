@@ -16,6 +16,7 @@ from dairy_web.analysis import (
 )
 from dairy_web.app import create_app
 from dairy_web.auth import AuthService, AuthSettings, SessionSigner
+import dairy_web.data_access as data_access
 from dairy_web.data_access import DayRecord, NoteRecord
 from dairy_web.resurface import resurface_weight
 from dairy_web.vault_reader import raw_text_sha256
@@ -375,6 +376,29 @@ def test_AC_6_map_payload_contains_gist_but_never_raw_text_and_rebuild_is_protec
         "n_noise": 0,
     }
     assert analysis.rebuild_calls == 1
+
+
+def test_AC_7_map_and_rebuild_return_explicit_503_while_semantic_index_builds(tmp_path):
+    client, analysis = build_client(tmp_path)
+
+    def building():
+        raise getattr(data_access, "SemanticIndexBuilding")()
+
+    analysis.get_map = building
+    analysis.rebuild = building
+    login(client)
+
+    map_response = client.get("/api/map")
+    rebuild_response = client.post("/api/rebuild")
+
+    assert (map_response.status_code, map_response.json()) == (
+        503,
+        {"detail": "semantic_index_building"},
+    )
+    assert (rebuild_response.status_code, rebuild_response.json()) == (
+        503,
+        {"detail": "semantic_index_building"},
+    )
 
 
 def test_AC_3_rebuild_endpoint_survives_labeler_failure_with_static_labels(tmp_path):

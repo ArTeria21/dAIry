@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from dairy_bot.services.enrichment_schemas import DayEnrichment, NoteEnrichment
 
@@ -31,74 +31,165 @@ DAY_COLUMNS = (
     "season",
 )
 DAY_UPDATE_COLUMNS = DAY_COLUMNS[1:]
+ENRICHMENT_SCHEMA_VERSION = 2
 
 
 class EnrichmentStore:
     """Small SQLite cache for enrichment values and change detection state."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        migration_hook: Callable[[str], None] | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
+        self._migration_hook = migration_hook
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        self._migrate()
+
+    def _checkpoint(self, step: str) -> None:
+        if self._migration_hook is not None:
+            self._migration_hook(step)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _ensure_schema(self) -> None:
+    def _migrate(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS notes (
-                    id TEXT PRIMARY KEY,
-                    date TEXT NOT NULL,
-                    ts TEXT NOT NULL,
-                    note_path TEXT NOT NULL,
-                    gist TEXT NOT NULL,
-                    mood TEXT NOT NULL,
-                    mood_confidence REAL NOT NULL,
-                    topics_json TEXT NOT NULL,
-                    mood_evidence TEXT NOT NULL,
-                    embedding TEXT NOT NULL
-                );
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if version > ENRICHMENT_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Unsupported enrichment database version: {version}"
+                )
+            if version == ENRICHMENT_SCHEMA_VERSION:
+                return
+            if version == 1:
+                columns = {
+                    str(row["name"])
+                    for row in conn.execute("PRAGMA table_info(notes)")
+                }
+                if "embedding" in columns:
+                    return
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(f"PRAGMA user_version = {ENRICHMENT_SCHEMA_VERSION}")
+                self._checkpoint("set_user_version")
+                return
 
-                CREATE TABLE IF NOT EXISTS days (
-                    date TEXT PRIMARY KEY,
-                    summary TEXT NOT NULL,
-                    mood TEXT NOT NULL,
-                    mood_confidence REAL NOT NULL,
-                    key_topics_json TEXT NOT NULL,
-                    sport INTEGER NULL,
-                    sport_evidence TEXT NULL,
-                    reading INTEGER NULL,
-                    reading_evidence TEXT NULL,
-                    purchases INTEGER NULL,
-                    purchases_evidence TEXT NULL,
-                    eating_outside INTEGER NULL,
-                    eating_outside_evidence TEXT NULL,
-                    deep_focus INTEGER NULL,
-                    deep_focus_evidence TEXT NULL,
-                    sleep_quality INTEGER NULL,
-                    sleep_quality_evidence TEXT NULL,
-                    weekday TEXT NOT NULL,
-                    is_weekend INTEGER NOT NULL,
-                    season TEXT NOT NULL
-                );
+            conn.execute("BEGIN IMMEDIATE")
+            self._create_base_schema(conn)
+            columns = {
+                str(row["name"]): row
+                for row in conn.execute("PRAGMA table_info(notes)")
+            }
+            embedding = columns.get("embedding")
+            if embedding is not None and bool(embedding["notnull"]):
+                self._make_legacy_embedding_nullable(conn)
+            target_version = 1 if embedding is not None else ENRICHMENT_SCHEMA_VERSION
+            conn.execute(f"PRAGMA user_version = {target_version}")
+            self._checkpoint("set_user_version")
 
-                CREATE TABLE IF NOT EXISTS note_entry_state (
-                    id TEXT PRIMARY KEY,
-                    content_hash TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS file_state (
-                    note_path TEXT NOT NULL,
-                    state_key TEXT NOT NULL,
-                    content_hash TEXT NOT NULL,
-                    PRIMARY KEY (note_path, state_key)
-                );
-                """
+    def _create_base_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notes (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                note_path TEXT NOT NULL,
+                gist TEXT NOT NULL,
+                mood TEXT NOT NULL,
+                mood_confidence REAL NOT NULL,
+                topics_json TEXT NOT NULL,
+                mood_evidence TEXT NOT NULL
             )
+            """
+        )
+        self._checkpoint("create_notes")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS days (
+                date TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                mood TEXT NOT NULL,
+                mood_confidence REAL NOT NULL,
+                key_topics_json TEXT NOT NULL,
+                sport INTEGER NULL,
+                sport_evidence TEXT NULL,
+                reading INTEGER NULL,
+                reading_evidence TEXT NULL,
+                purchases INTEGER NULL,
+                purchases_evidence TEXT NULL,
+                eating_outside INTEGER NULL,
+                eating_outside_evidence TEXT NULL,
+                deep_focus INTEGER NULL,
+                deep_focus_evidence TEXT NULL,
+                sleep_quality INTEGER NULL,
+                sleep_quality_evidence TEXT NULL,
+                weekday TEXT NOT NULL,
+                is_weekend INTEGER NOT NULL,
+                season TEXT NOT NULL
+            )
+            """
+        )
+        self._checkpoint("create_days")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS note_entry_state (
+                id TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL
+            )
+            """
+        )
+        self._checkpoint("create_note_entry_state")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS file_state (
+                note_path TEXT NOT NULL,
+                state_key TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                PRIMARY KEY (note_path, state_key)
+            )
+            """
+        )
+        self._checkpoint("create_file_state")
+
+    def _make_legacy_embedding_nullable(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE notes_with_legacy_embedding (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                note_path TEXT NOT NULL,
+                gist TEXT NOT NULL,
+                mood TEXT NOT NULL,
+                mood_confidence REAL NOT NULL,
+                topics_json TEXT NOT NULL,
+                mood_evidence TEXT NOT NULL,
+                embedding TEXT NULL
+            )
+            """
+        )
+        self._checkpoint("create_nullable_notes")
+        conn.execute(
+            """
+            INSERT INTO notes_with_legacy_embedding (
+                id, date, ts, note_path, gist, mood, mood_confidence,
+                topics_json, mood_evidence, embedding
+            )
+            SELECT id, date, ts, note_path, gist, mood, mood_confidence,
+                   topics_json, mood_evidence, embedding
+            FROM notes
+            """
+        )
+        self._checkpoint("copy_nullable_notes")
+        conn.execute("DROP TABLE notes")
+        self._checkpoint("drop_legacy_notes")
+        conn.execute("ALTER TABLE notes_with_legacy_embedding RENAME TO notes")
+        self._checkpoint("rename_nullable_notes")
 
     def upsert_note(
         self,
@@ -108,7 +199,6 @@ class EnrichmentStore:
         ts: str,
         note_path: str,
         enrichment: NoteEnrichment,
-        embedding: list[float],
         content_hash: str,
     ) -> None:
         topics = [topic.value for topic in enrichment.topics]
@@ -117,9 +207,9 @@ class EnrichmentStore:
                 """
                 INSERT INTO notes (
                     id, date, ts, note_path, gist, mood, mood_confidence,
-                    topics_json, mood_evidence, embedding
+                    topics_json, mood_evidence
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     date = excluded.date,
                     ts = excluded.ts,
@@ -128,8 +218,7 @@ class EnrichmentStore:
                     mood = excluded.mood,
                     mood_confidence = excluded.mood_confidence,
                     topics_json = excluded.topics_json,
-                    mood_evidence = excluded.mood_evidence,
-                    embedding = excluded.embedding
+                    mood_evidence = excluded.mood_evidence
                 """,
                 (
                     note_id,
@@ -141,7 +230,6 @@ class EnrichmentStore:
                     enrichment.mood_confidence,
                     json.dumps(topics, ensure_ascii=False),
                     enrichment.mood_evidence,
-                    json.dumps(embedding),
                 ),
             )
             conn.execute(
@@ -259,6 +347,78 @@ class EnrichmentStore:
                 """,
                 (note_path, state_key, content_hash),
             )
+
+
+def drop_legacy_embedding_column(
+    db_path: Path | str,
+    *,
+    migration_hook: Callable[[str], None] | None = None,
+) -> bool:
+    """Remove the imported legacy vector column without changing enrichment data."""
+    path = Path(db_path)
+    if not path.exists():
+        return False
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if version > ENRICHMENT_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Unsupported enrichment database version: {version}"
+            )
+        columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(notes)")
+        }
+        if "embedding" not in columns:
+            if version < ENRICHMENT_SCHEMA_VERSION:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(f"PRAGMA user_version = {ENRICHMENT_SCHEMA_VERSION}")
+                if migration_hook is not None:
+                    migration_hook("set_user_version")
+            return False
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DROP TABLE IF EXISTS notes_without_legacy_embedding")
+        if migration_hook is not None:
+            migration_hook("drop_stale_without_embedding")
+        conn.execute(
+            """
+            CREATE TABLE notes_without_legacy_embedding (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                note_path TEXT NOT NULL,
+                gist TEXT NOT NULL,
+                mood TEXT NOT NULL,
+                mood_confidence REAL NOT NULL,
+                topics_json TEXT NOT NULL,
+                mood_evidence TEXT NOT NULL
+            )
+            """
+        )
+        if migration_hook is not None:
+            migration_hook("create_without_embedding")
+        conn.execute(
+            """
+            INSERT INTO notes_without_legacy_embedding (
+                id, date, ts, note_path, gist, mood, mood_confidence,
+                topics_json, mood_evidence
+            )
+            SELECT id, date, ts, note_path, gist, mood, mood_confidence,
+                   topics_json, mood_evidence
+            FROM notes
+            """
+        )
+        if migration_hook is not None:
+            migration_hook("copy_without_embedding")
+        conn.execute("DROP TABLE notes")
+        if migration_hook is not None:
+            migration_hook("drop_notes_with_embedding")
+        conn.execute("ALTER TABLE notes_without_legacy_embedding RENAME TO notes")
+        if migration_hook is not None:
+            migration_hook("rename_without_embedding")
+        conn.execute(f"PRAGMA user_version = {ENRICHMENT_SCHEMA_VERSION}")
+        if migration_hook is not None:
+            migration_hook("set_user_version")
+    return True
 
 
 def _bool_to_db(value: bool | None) -> int | None:

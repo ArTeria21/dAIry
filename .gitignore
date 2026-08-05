@@ -19,5 +19,7 @@ diary
 .env
 gcp_creds.json
 
-# Local enrichment cache
+# Local bot-owned SQLite state and sidecar journals
 *.sqlite3
+*.sqlite3-*
+data/review_images/

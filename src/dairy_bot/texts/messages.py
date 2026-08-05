@@ -220,7 +220,7 @@ def topic_label(value: object, lang: str | None = None) -> str:
 
 def format_transcription_preview(transcription: str, lang: str | None = None) -> str:
     """Show a safe HTML preview of the transcription."""
-    safe_text = escape(transcription.strip()) or "…"
+    safe_text = escape(transcription)
     title = t("voice_preview_title", lang)
     question = t("voice_preview_question", lang)
     return f"<b>{title}</b>\n<blockquote>{safe_text}</blockquote>\n{question}"
