@@ -7,10 +7,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock ./
+COPY web/backend/pyproject.toml web/backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-cache
 
-COPY dairy_web ./dairy_web
+COPY web/backend/dairy_web ./dairy_web
+COPY src/dairy_bot/__init__.py ./dairy_bot/__init__.py
+COPY src/dairy_bot/prompts ./dairy_bot/prompts
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000

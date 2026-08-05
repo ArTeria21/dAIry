@@ -79,7 +79,7 @@ def test_AC_5_1_toc_retries_schema_invalid_output_without_manual_cleanup():
     assert len(completions.calls) == 2
     assert all(call["max_tokens"] == 500 for call in completions.calls)
     assert all(
-        call["provider"] == {"require_parameters": True}
+        call["extra_body"] == {"provider": {"require_parameters": True}}
         for call in completions.calls
     )
     response_format = completions.calls[0]["response_format"]

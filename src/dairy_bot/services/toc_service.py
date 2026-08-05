@@ -308,7 +308,7 @@ async def _summarize_note(
             model=model_name,
             temperature=0.2,
             max_tokens=TOC_SUMMARY_MAX_TOKENS,
-            provider={"require_parameters": True},
+            extra_body={"provider": {"require_parameters": True}},
             response_format=_build_response_format(max_tags, language),
             messages=[
                 {"role": "system", "content": system_prompt},

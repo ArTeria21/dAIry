@@ -55,7 +55,8 @@ services:
 
   layer3-backend:
     build:
-      context: ./web/backend
+      context: .
+      dockerfile: web/backend/Dockerfile
     image: dairy-layer3-backend:latest
     env_file:
       - .env
