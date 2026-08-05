@@ -79,6 +79,10 @@ MESSAGES = {
         LANG_EN: "I couldn't hear anything in that recording. Want to try again?",
         LANG_RU: "В записи не было звука. Попробуем ещё раз?",
     },
+    "telegram_delivery_error": {
+        LANG_EN: "⚠️ I couldn't send the complete message. Please try again.",
+        LANG_RU: "⚠️ Не удалось отправить сообщение полностью. Попробуйте ещё раз.",
+    },
     "unauthorized": {
         LANG_EN: "🔒 This bot is private. Access is restricted.",
         LANG_RU: "🔒 Это приватный бот. Доступ ограничен.",

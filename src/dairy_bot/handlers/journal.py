@@ -78,49 +78,88 @@ def _user_lang(user_id: int | None) -> str:
     return get_language(user_id or 0)
 
 
-def _split_long_line(line: str, max_len: int) -> list[str]:
-    parts: list[str] = []
-    current: list[str] = []
-    current_len = 0
-    for char in line:
-        char_len = len(escape(char))
-        if current_len + char_len > max_len and current:
-            parts.append("".join(current))
-            current = [char]
-            current_len = char_len
-        else:
-            current.append(char)
-            current_len += char_len
-    if current:
-        parts.append("".join(current))
-    return parts
-
-
-def _split_text_for_html(text: str, max_len: int) -> list[str]:
+def _split_text_by_html_length(text: str, max_len: int) -> list[str]:
+    """Split text without loss, preferring whitespace within an HTML-safe limit."""
     if not text:
         return []
+    if max_len <= 0:
+        raise ValueError("max_len must be positive")
+
     chunks: list[str] = []
-    current: list[str] = []
-    current_len = 0
-    for line in text.splitlines(keepends=True):
-        line_len = len(escape(line))
-        if line_len > max_len:
-            if current:
-                chunks.append("".join(current).rstrip("\n"))
-                current = []
-                current_len = 0
-            chunks.extend(part.rstrip("\n") for part in _split_long_line(line, max_len))
-            continue
-        if current_len + line_len > max_len and current:
-            chunks.append("".join(current).rstrip("\n"))
-            current = [line]
-            current_len = line_len
-        else:
-            current.append(line)
-            current_len += line_len
-    if current:
-        chunks.append("".join(current).rstrip("\n"))
-    return [chunk for chunk in chunks if chunk]
+    start = 0
+    while start < len(text):
+        escaped_len = 0
+        end = start
+        last_whitespace_end: int | None = None
+        while end < len(text):
+            char_len = len(escape(text[end]))
+            if escaped_len + char_len > max_len:
+                break
+            escaped_len += char_len
+            end += 1
+            if text[end - 1].isspace():
+                last_whitespace_end = end
+
+        if end == len(text):
+            chunks.append(text[start:end])
+            break
+        if last_whitespace_end is not None and last_whitespace_end > start:
+            end = last_whitespace_end
+        elif end == start:
+            end += 1
+        chunks.append(text[start:end])
+        start = end
+    return chunks
+
+
+def _numbered_payload_chunks(text: str, base_overhead: int) -> list[str]:
+    """Reserve room for markup and stable N/N numbering, then split payload."""
+    expected_total = 2
+    while True:
+        marker_len = len(f"\n{expected_total}/{expected_total}")
+        chunks = _split_text_by_html_length(
+            text, MAX_TG_MESSAGE_LEN - base_overhead - marker_len
+        )
+        actual_total = len(chunks)
+        if actual_total == expected_total:
+            return chunks
+        expected_total = actual_total
+
+
+def _format_numbered_voice_previews(transcription: str, lang: str) -> list[str]:
+    base_overhead = len(messages.format_transcription_preview("", lang))
+    chunks = _numbered_payload_chunks(transcription, base_overhead)
+    total = len(chunks)
+    title = escape(messages.t("voice_preview_title", lang))
+    question = escape(messages.t("voice_preview_question", lang))
+    previews: list[str] = []
+    for index, chunk in enumerate(chunks, start=1):
+        prefix = f"<b>{title}</b>\n" if index == 1 else ""
+        suffix = f"\n{question}" if index == total else ""
+        previews.append(
+            f"{prefix}<blockquote>{escape(chunk)}</blockquote>"
+            f"{suffix}\n{index}/{total}"
+        )
+    return previews
+
+
+def _format_numbered_today_messages(title: str, content: str) -> list[str]:
+    base_overhead = len(f"{title}\n\n")
+    chunks = _numbered_payload_chunks(content, base_overhead)
+    total = len(chunks)
+    return [
+        f"{title}\n\n{escape(chunk)}\n{index}/{total}"
+        if index == 1
+        else f"{escape(chunk)}\n{index}/{total}"
+        for index, chunk in enumerate(chunks, start=1)
+    ]
+
+
+async def _notify_delivery_error(message: Message, lang: str) -> None:
+    await _safe_respond(
+        "telegram delivery error notice",
+        lambda: message.answer(messages.t("telegram_delivery_error", lang)),
+    )
 
 
 def get_journal_lock() -> asyncio.Lock:
@@ -245,19 +284,23 @@ async def handle_today(
     date_label = _format_display_date(datetime.now(settings.timezone).date())
     reply_text = messages.format_today_note(date_label, content, lang)
     if len(reply_text) <= MAX_TG_MESSAGE_LEN:
-        await _safe_respond("today note", lambda: message.answer(reply_text))
+        sent = await _safe_telegram_request(
+            "today note", lambda: message.answer(reply_text)
+        )
+        if sent is None:
+            await _notify_delivery_error(message, lang)
         return
 
     title = messages.t("today_header", lang).format(date=escape(date_label))
-    await _safe_respond("today note header", lambda: message.answer(title))
-    for index, chunk in enumerate(
-        _split_text_for_html(content.strip(), MAX_TG_MESSAGE_LEN), start=1
-    ):
-        escaped_chunk = escape(chunk)
-        await _safe_respond(
+    chunks = _format_numbered_today_messages(title, content.strip())
+    for index, chunk in enumerate(chunks, start=1):
+        sent = await _safe_telegram_request(
             f"today note chunk {index}",
-            lambda chunk=escaped_chunk: message.answer(chunk),
+            lambda chunk=chunk: message.answer(chunk),
         )
+        if sent is None:
+            await _notify_delivery_error(message, lang)
+            return
 
 
 @router.message(Command("yesterday"))
@@ -536,10 +579,23 @@ async def handle_voice(message: Message, state: FSMContext, settings: Settings) 
     keyboard.adjust(3)
 
     preview = messages.format_transcription_preview(transcription, lang)
-    await _safe_respond(
-        "transcription preview",
-        lambda: message.answer(preview, reply_markup=keyboard.as_markup()),
+    previews = (
+        [preview]
+        if len(preview) <= MAX_TG_MESSAGE_LEN
+        else _format_numbered_voice_previews(transcription, lang)
     )
+    markup = keyboard.as_markup()
+    for index, preview_part in enumerate(previews, start=1):
+        reply_markup = markup if index == len(previews) else None
+        sent = await _safe_telegram_request(
+            f"transcription preview part {index}",
+            lambda preview_part=preview_part, reply_markup=reply_markup: message.answer(
+                preview_part, reply_markup=reply_markup
+            ),
+        )
+        if sent is None:
+            await _notify_delivery_error(message, lang)
+            return
     await state.set_state(VoiceStates.waiting_decision)
     await state.update_data(transcription=transcription)
 
