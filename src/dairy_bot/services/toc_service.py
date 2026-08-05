@@ -12,6 +12,7 @@ import yaml
 from openai import AsyncOpenAI
 
 from dairy_bot.config import Settings, language_display_name
+from dairy_bot.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -202,31 +203,26 @@ async def _save_state(journal_dir: Path, state: dict[str, Any]) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _build_system_prompt(max_tags: int, language: str = "EN") -> str:
+def _build_system_prompt(
+    max_tags: int,
+    language: str = "EN",
+    *,
+    retry: bool = False,
+) -> str:
     output_language = language_display_name(language)
     tag_list = "\n".join(
         f"- {tag}: {desc}" for tag, desc in sorted(TAG_TAXONOMY.items())
     )
-    return (
-        "You are an indexer for a personal journal vault. "
-        f"Produce a concise {output_language} summary and select relevant tags "
-        "for a note.\n\n"
-        "The journal may be written in Russian, English, German, or a mix. "
-        f"Always write the summary in {output_language} regardless of source "
-        "language.\n\n"
-        "RULES:\n"
-        "- summary: 1-2 sentences, third-person, factual. "
-        "Capture the main topics and themes. No speculation.\n"
-        f"- tags: 0-{max_tags} tags STRICTLY from the vocabulary below. "
-        "Never invent new tags.\n\n"
-        f"ALLOWED TAGS:\n{tag_list}\n\n"
-        "Respond with valid JSON only, no markdown fences:\n"
-        '{"summary": "...", "tags": ["tag1", "tag2"]}'
+    return load_prompt(
+        "toc/system_retry" if retry else "toc/system",
+        output_language=output_language,
+        max_tags=max_tags,
+        tag_list=tag_list,
     )
 
 
 def _build_user_prompt(raw_text: str, rel_path: str) -> str:
-    return f"Note path: {rel_path}\n\nNote content:\n{raw_text}"
+    return load_prompt("toc/user", rel_path=rel_path, raw_text=raw_text)
 
 
 def _build_response_format(max_tags: int, language: str = "EN") -> dict[str, Any]:
@@ -303,12 +299,11 @@ async def _summarize_note(
 ) -> dict[str, Any]:
     last_error: TocLLMResponseError | None = None
     for attempt in range(TOC_SUMMARY_ATTEMPTS):
-        system_prompt = _build_system_prompt(max_tags, language)
-        if attempt > 0:
-            system_prompt += (
-                "\n\nYour previous response could not be parsed as JSON. "
-                "Return exactly one complete JSON object that matches the schema."
-            )
+        system_prompt = _build_system_prompt(
+            max_tags,
+            language,
+            retry=attempt > 0,
+        )
         completion = await client.chat.completions.create(
             model=model_name,
             temperature=0.2,

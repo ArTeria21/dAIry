@@ -259,6 +259,8 @@ def test_EC_6_2_atomic_source_recheck_reads_raw_vault_instead_of_stale_index(
         REVIEWS_ENABLED=True,
         REVIEWS_DB_PATH=tmp_path / "reviews.sqlite3",
         REVIEW_ASSETS_DIR=tmp_path / "images",
+        REVIEW_IMAGE_MODEL_NAME="test/primary-image",
+        REVIEW_IMAGE_FALLBACK_MODEL_NAME="test/fallback-image",
         WEB_PUBLIC_BASE_URL="https://diary.example",
         LANGUAGE="EN",
     )

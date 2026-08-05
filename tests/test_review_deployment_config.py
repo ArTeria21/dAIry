@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -14,6 +16,8 @@ def _settings(tmp_path, **overrides) -> Settings:
         "JOURNAL_DIR": tmp_path,
         "REVIEWS_ENABLED": True,
         "WEB_PUBLIC_BASE_URL": "https://diary.example.org",
+        "REVIEW_IMAGE_MODEL_NAME": "test/primary-image",
+        "REVIEW_IMAGE_FALLBACK_MODEL_NAME": "test/fallback-image",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -51,3 +55,34 @@ def test_EC_4_disabled_reviews_keep_local_development_default(tmp_path):
     )
 
     assert settings.reviews_enabled is False
+
+
+def test_image_models_are_required_configuration_without_code_or_compose_defaults(
+    tmp_path,
+):
+    with pytest.raises(
+        ValidationError,
+        match="REVIEW_IMAGE_MODEL_NAME|REVIEW_IMAGE_FALLBACK_MODEL_NAME",
+    ):
+        Settings(
+            _env_file=None,
+            BOT_TOKEN="123:test",
+            ALLOWED_USER_ID=42,
+            OPENROUTER_API_KEY="sk-test",
+            JOURNAL_DIR=tmp_path,
+        )
+
+    compose = (Path(__file__).parents[1] / "docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "REVIEW_IMAGE_MODEL_NAME: "
+        "${REVIEW_IMAGE_MODEL_NAME:?Set REVIEW_IMAGE_MODEL_NAME in .env}"
+    ) in compose
+    assert (
+        "REVIEW_IMAGE_FALLBACK_MODEL_NAME: "
+        "${REVIEW_IMAGE_FALLBACK_MODEL_NAME:"
+        "?Set REVIEW_IMAGE_FALLBACK_MODEL_NAME in .env}"
+    ) in compose
+    assert "openai/gpt-image-2" not in compose
+    assert "recraft/recraft-v4.1-pro" not in compose

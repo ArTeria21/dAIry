@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
+from dairy_bot.prompts import load_prompt
 from dairy_web.data_access import NoteRecord
 
 
@@ -481,17 +482,18 @@ class OpenRouterClusterLabeler:
 
     def _prompt(self, notes: list[NoteRecord]) -> str:
         gists = "\n".join(f"- {note.gist}" for note in notes)
-        return (
-            f"Name this journal cluster in 2-4 words in {self.language_name}."
-            f"\nGists:\n{gists}"
+        return load_prompt(
+            "clusters/label_user",
+            output_language=self.language_name,
+            gists=gists,
         )
 
     def _description_prompt(self, notes: list[NoteRecord]) -> str:
         gists = "\n".join(f"- {note.gist}" for note in notes)
-        return (
-            "Summarize what unites this personal journal cluster in 1-2 plain "
-            f"{self.language_name} sentences. Return only the summary."
-            f"\nGists:\n{gists}"
+        return load_prompt(
+            "clusters/description_user",
+            output_language=self.language_name,
+            gists=gists,
         )
 
     def _complete_with_openrouter(self, model: str, prompt: str) -> str:
@@ -505,10 +507,9 @@ class OpenRouterClusterLabeler:
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You describe clusters of personal journal notes. Follow "
-                        "the user's instruction exactly and return only the "
-                        f"requested text in {self.language_name}."
+                    "content": load_prompt(
+                        "clusters/system",
+                        output_language=self.language_name,
                     ),
                 },
                 {"role": "user", "content": prompt},

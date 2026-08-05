@@ -18,6 +18,8 @@ def _settings(tmp_path: Path, **overrides) -> Settings:
         "ALLOWED_USER_ID": 42,
         "OPENROUTER_API_KEY": "sk-test",
         "JOURNAL_DIR": tmp_path,
+        "REVIEW_IMAGE_MODEL_NAME": "test/primary-image",
+        "REVIEW_IMAGE_FALLBACK_MODEL_NAME": "test/fallback-image",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -56,6 +58,8 @@ def test_AC_3b_1_review_settings_have_locked_defaults_and_parse_overrides(tmp_pa
         REVIEW_MONTHLY_SEND_TIME="11:15",
         REVIEW_MAX_SEARCH_CALLS="4",
         EMBEDDINGS_DB_PATH=tmp_path / "semantic.sqlite3",
+        REVIEW_IMAGE_MODEL_NAME="custom/primary-image",
+        REVIEW_IMAGE_FALLBACK_MODEL_NAME="custom/fallback-image",
     )
 
     assert defaults.reviews_enabled is False
@@ -63,8 +67,8 @@ def test_AC_3b_1_review_settings_have_locked_defaults_and_parse_overrides(tmp_pa
     assert defaults.review_assets_dir == Path("data/review_images")
     assert defaults.embeddings_db_path == Path("data/embeddings.sqlite3")
     assert defaults.review_model_name == "openai/gpt-5.6-terra"
-    assert defaults.review_image_model_name == "openai/gpt-image-2"
-    assert defaults.review_image_fallback_model_name == "recraft/recraft-v4.1-pro"
+    assert defaults.review_image_model_name == "test/primary-image"
+    assert defaults.review_image_fallback_model_name == "test/fallback-image"
     assert defaults.review_max_search_calls == 6
     assert defaults.review_weekly_send_time.isoformat(timespec="minutes") == "09:00"
     assert defaults.review_monthly_send_time.isoformat(timespec="minutes") == "10:00"
@@ -73,6 +77,8 @@ def test_AC_3b_1_review_settings_have_locked_defaults_and_parse_overrides(tmp_pa
     assert custom.review_monthly_send_time.isoformat(timespec="minutes") == "11:15"
     assert custom.review_max_search_calls == 4
     assert custom.embeddings_db_path == tmp_path / "semantic.sqlite3"
+    assert custom.review_image_model_name == "custom/primary-image"
+    assert custom.review_image_fallback_model_name == "custom/fallback-image"
 
 
 def test_AC_3b_2_corpus_indexer_caches_embedding_metadata_and_first_seen(tmp_path):

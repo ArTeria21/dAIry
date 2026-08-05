@@ -116,7 +116,12 @@ def test_AC_N2_safety_failure_reuses_exact_brief_and_final_failure_is_null(tmp_p
         ]
     )
     generator = reviews.OpenRouterImageGenerator(
-        api_key="secret", http_client=http, output_dir=tmp_path, primary_attempts=2
+        api_key="secret",
+        http_client=http,
+        output_dir=tmp_path,
+        primary_model="test/primary-image",
+        fallback_model="test/fallback-image",
+        primary_attempts=2,
     )
 
     result = asyncio.run(

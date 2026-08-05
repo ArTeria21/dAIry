@@ -361,6 +361,8 @@ def test_AC_6_superseded_generation_never_replaces_active_review_or_jpeg(
         api_key="secret",
         http_client=_ImageHTTP(b"\xff\xd8new-generated\xff\xd9"),
         output_dir=tmp_path,
+        primary_model="test/primary-image",
+        fallback_model="test/fallback-image",
     )
     delivery_calls: list[str] = []
 

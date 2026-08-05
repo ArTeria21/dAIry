@@ -22,6 +22,8 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         "ALLOWED_USER_ID": 123,
         "OPENROUTER_API_KEY": "sk-or-test",
         "JOURNAL_DIR": tmp_path,
+        "REVIEW_IMAGE_MODEL_NAME": "test/primary-image",
+        "REVIEW_IMAGE_FALLBACK_MODEL_NAME": "test/fallback-image",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)

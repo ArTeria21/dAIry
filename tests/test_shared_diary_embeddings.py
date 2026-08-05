@@ -119,6 +119,8 @@ def test_AC_3_EC_1_EC_2_reviews_only_runtime_reindexes_changes_and_deletions(tmp
         ENRICHMENT_ENABLED=False,
         REVIEWS_ENABLED=True,
         WEB_PUBLIC_BASE_URL="https://diary.example.org",
+        REVIEW_IMAGE_MODEL_NAME="test/primary-image",
+        REVIEW_IMAGE_FALLBACK_MODEL_NAME="test/fallback-image",
         EMBEDDINGS_DB_PATH=tmp_path / "embeddings.sqlite3",
         EMBEDDING_MODEL_NAME="intfloat/multilingual-e5-large",
     )

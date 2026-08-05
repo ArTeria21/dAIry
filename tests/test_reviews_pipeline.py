@@ -269,7 +269,7 @@ def test_AC_2b_3_openrouter_adapter_uses_model_strict_schemas_and_prompt_languag
     assert {call["model"] for call in completions.calls} == {
         "openai/gpt-5.6-terra"
     }
-    assert all(call["reasoning_effort"] == "high" for call in completions.calls)
+    assert all(call["reasoning_effort"] == "low" for call in completions.calls)
     assert all(call["max_completion_tokens"] == 16_000 for call in completions.calls)
     assert all("temperature" not in call for call in completions.calls)
     assert all(
@@ -282,12 +282,13 @@ def test_AC_2b_3_openrouter_adapter_uses_model_strict_schemas_and_prompt_languag
         for call in completions.calls
     )
     system_prompts = [call["messages"][0]["content"] for call in completions.calls]
-    assert all(
-        not any("\u0400" <= character <= "\u04ff" for character in prompt)
-        for prompt in system_prompts
-    )
     planner_prompt, draft_prompt, critic_prompt, revision_prompt, en_planner = (
         system_prompts
+    )
+    assert any("\u0400" <= character <= "\u04ff" for character in draft_prompt)
+    assert all(
+        not any("\u0400" <= character <= "\u04ff" for character in prompt)
+        for prompt in (planner_prompt, critic_prompt, revision_prompt, en_planner)
     )
     assert "Both `objective` and every `search_queries` item" in planner_prompt
     assert "must be written in English" in planner_prompt

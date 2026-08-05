@@ -7,6 +7,7 @@ from openai.lib._pydantic import to_strict_json_schema
 from pydantic import BaseModel
 
 from dairy_bot.config import Settings, language_display_name
+from dairy_bot.prompts import load_prompt
 from dairy_bot.services.enrichment_schemas import DayEnrichment, NoteEnrichment, Topic
 
 
@@ -17,21 +18,16 @@ OPENROUTER_STRUCTURED_EXTRA_BODY = {
 
 
 def _note_system_prompt(language: str) -> str:
-    output_language = language_display_name(language)
-    return (
-        "You enrich one personal journal note. Follow the schema exactly. "
-        f"Write gist and mood_evidence in {output_language}. "
-        "Select topics only from the schema enum. "
-        "Do not infer facts beyond the note text."
+    return load_prompt(
+        "enrichment/note_system",
+        output_language=language_display_name(language),
     )
 
 
 def _day_system_prompt(language: str) -> str:
-    output_language = language_display_name(language)
-    return (
-        "You enrich one whole day of a personal journal. Follow the schema exactly. "
-        "Sparse facts must be null unless explicitly mentioned in the day's notes. "
-        f"Write summary and all evidence fields in {output_language}."
+    return load_prompt(
+        "enrichment/day_system",
+        output_language=language_display_name(language),
     )
 
 
@@ -51,7 +47,7 @@ class OpenRouterEnrichmentClient:
             schema_model=NoteEnrichment,
             schema_name="note_enrichment",
             system_prompt=_note_system_prompt(getattr(self.settings, "language", "EN")),
-            user_prompt=f"Journal note:\n{text}",
+            user_prompt=load_prompt("enrichment/note_user", text=text),
         )
         return NoteEnrichment.model_validate(raw)
 
@@ -61,7 +57,7 @@ class OpenRouterEnrichmentClient:
             schema_model=DayEnrichment,
             schema_name="day_enrichment",
             system_prompt=_day_system_prompt(getattr(self.settings, "language", "EN")),
-            user_prompt=f"Daily journal note with note-level labels:\n{text}",
+            user_prompt=load_prompt("enrichment/day_user", text=text),
         )
         return DayEnrichment.model_validate(raw)
 

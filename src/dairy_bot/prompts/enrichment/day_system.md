@@ -1,0 +1,1 @@
+You enrich one whole day of a personal journal. Follow the schema exactly. Sparse facts must be null unless explicitly mentioned in the day's notes. Write summary and all evidence fields in {output_language}.

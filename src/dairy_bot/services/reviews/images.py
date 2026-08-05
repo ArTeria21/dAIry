@@ -4,13 +4,12 @@ import asyncio
 import base64
 import os
 import re
-from importlib.resources import files
 from pathlib import Path
 from typing import Any, Protocol
 
+from dairy_bot.prompts import load_prompt, load_prompt_bytes
+
 IMAGE_API_URL = "https://openrouter.ai/api/v1/images"
-DEFAULT_PRIMARY_IMAGE_MODEL = "openai/gpt-image-2"
-DEFAULT_FALLBACK_IMAGE_MODEL = "recraft/recraft-v4.1-pro"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _SAFE_PERIOD_RE = re.compile(r"^[0-9]{4}-(?:[0-9]{2}|[0-9]{2}-[0-9]{2})$")
 
@@ -26,8 +25,7 @@ class ImageHTTPClient(Protocol):
 
 
 def load_style_prompt_bytes() -> bytes:
-    resource = files(__package__).joinpath("resources/style_prompt.txt")
-    return resource.read_bytes().rstrip(b"\n")
+    return load_prompt_bytes("review/visual_style")
 
 
 def load_style_prompt() -> str:
@@ -35,17 +33,9 @@ def load_style_prompt() -> str:
 
 
 def build_visual_prompt(kind: str, visual_brief: str) -> str:
-    if kind == "week":
-        composition = "Use one central symbol for the period."
-    elif kind == "month":
-        composition = "Use a layered synthesis of weekly motifs for the period."
-    else:
+    if kind not in {"week", "month"}:
         raise ValueError(f"Unsupported review kind: {kind}")
-    return (
-        f"{load_style_prompt()}\n\nDynamic visual brief:\n"
-        f"{composition} No readable text, letters, numerals, or typography. "
-        f"{visual_brief}"
-    )
+    return load_prompt(f"review/image_{kind}", visual_brief=visual_brief)
 
 
 class OpenRouterImageGenerator:
@@ -55,8 +45,8 @@ class OpenRouterImageGenerator:
         api_key: str,
         http_client: ImageHTTPClient,
         output_dir: Path,
-        primary_model: str = DEFAULT_PRIMARY_IMAGE_MODEL,
-        fallback_model: str = DEFAULT_FALLBACK_IMAGE_MODEL,
+        primary_model: str,
+        fallback_model: str,
         primary_attempts: int = 2,
         timeout_seconds: float = 180.0,
     ) -> None:

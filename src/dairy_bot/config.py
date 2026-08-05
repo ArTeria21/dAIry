@@ -81,10 +81,10 @@ class Settings(BaseSettings):
         default="openai/gpt-5.6-terra", alias="REVIEW_MODEL_NAME"
     )
     review_image_model_name: str = Field(
-        default="openai/gpt-image-2", alias="REVIEW_IMAGE_MODEL_NAME"
+        ..., alias="REVIEW_IMAGE_MODEL_NAME"
     )
     review_image_fallback_model_name: str = Field(
-        default="recraft/recraft-v4.1-pro",
+        ...,
         alias="REVIEW_IMAGE_FALLBACK_MODEL_NAME",
     )
     review_max_search_calls: int = Field(

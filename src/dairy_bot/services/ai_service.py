@@ -5,20 +5,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from dairy_bot.config import Settings
-
-PROMPT_TEXT = (
-    "Role: You are an expert personal stenographer creating clean, readable notes for a diary.\n"
-    "Context: The speaker is a Russian native speaker living in Austria who works in Tech/ML.\n"
-    "Instructions:\n"
-    "1. Primary Language: Transcribe mainly in Russian.\n"
-    "2. Multilingual Handling: The audio contains mixed languages. \n"
-    "   - English: Technical terms (Machine Learning, Python, coding, Large Language Models (LLMs)).\
-    Write them in English (e.g., 'backend', 'deployment', 'llm', 'ChatGPT', 'Claude Code'), NEVER transliterate to Cyrillic.\n"
-    "   - German: Locations, street names, and daily life terms specific to Austria. Write them in correct German (e.g., 'Meldezettel', 'Hauptbahnhof'), even if pronounced with an accent.\n"
-    "3. Formatting: Output clean, grammatically correct text. Remove stuttering and self-corrections. Structure the text into logical paragraphs.\n"
-    "4. Do not change the style and content of the text! Keep it alive and emotional according to how it's recorded.\n"
-    "5. Output: Return ONLY the text, no introductory phrases."
-)
+from dairy_bot.prompts import load_prompt
 
 
 def _decode_message_content(content: Any) -> str:
@@ -49,7 +36,10 @@ async def transcribe_audio(path: Path, settings: Settings) -> str:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": PROMPT_TEXT},
+                        {
+                            "type": "text",
+                            "text": load_prompt("voice/transcription"),
+                        },
                         {
                             "type": "input_audio",
                             "input_audio": {"data": audio_base64, "format": "wav"},

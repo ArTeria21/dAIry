@@ -23,6 +23,8 @@ def _settings(tmp_path: Path, **overrides) -> Settings:
         "REVIEW_ASSETS_DIR": tmp_path / "images",
         "WEB_PUBLIC_BASE_URL": "https://diary.example",
         "LANGUAGE": "EN",
+        "REVIEW_IMAGE_MODEL_NAME": "test/primary-image",
+        "REVIEW_IMAGE_FALLBACK_MODEL_NAME": "test/fallback-image",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
