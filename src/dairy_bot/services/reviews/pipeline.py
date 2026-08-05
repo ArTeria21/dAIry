@@ -344,7 +344,7 @@ class OpenRouterReviewLLM:
         completion = await self.client.chat.completions.create(
             model=self.model,
             reasoning_effort="low",
-            max_completion_tokens=16_000,
+            max_tokens=16_000,
             response_format={
                 "type": "json_schema",
                 "json_schema": {

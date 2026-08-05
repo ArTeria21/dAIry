@@ -3,6 +3,7 @@ export type ReviewKind = "week" | "month";
 export type ReviewArchiveItem = {
   kind: ReviewKind;
   period: string;
+  status: "ready" | "stale";
   start_date: string;
   end_date: string;
   title: string;
@@ -23,6 +24,7 @@ export type ReviewEvidence = {
 export type ReviewDetail = {
   kind: ReviewKind;
   period: string;
+  status: "ready" | "stale";
   start_date: string;
   end_date: string;
   title: string;

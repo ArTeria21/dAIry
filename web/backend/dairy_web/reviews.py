@@ -32,7 +32,7 @@ class ReviewReadStore:
                 rows = connection.execute(
                     """
                     SELECT * FROM reviews
-                    WHERE kind = ? AND status = 'ready'
+                    WHERE kind = ? AND status IN ('ready', 'stale')
                     ORDER BY start_date DESC
                     """,
                     (kind,),
@@ -52,7 +52,8 @@ class ReviewReadStore:
                 row = connection.execute(
                     """
                     SELECT * FROM reviews
-                    WHERE kind = ? AND period = ? AND status = 'ready'
+                    WHERE kind = ? AND period = ?
+                      AND status IN ('ready', 'stale')
                     """,
                     (kind, period),
                 ).fetchone()

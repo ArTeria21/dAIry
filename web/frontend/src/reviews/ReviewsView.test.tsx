@@ -16,6 +16,7 @@ const archive = {
     {
       kind: "week",
       period: "2026-07-26",
+      status: "ready",
       start_date: "2026-07-26",
       end_date: "2026-08-01",
       title: "A week of recalibration",
@@ -32,6 +33,7 @@ function detail(overrides: Record<string, unknown> = {}) {
   return {
     kind: "week",
     period: "2026-07-26",
+    status: "ready",
     start_date: "2026-07-26",
     end_date: "2026-08-01",
     title: "A week of recalibration",
@@ -130,6 +132,21 @@ describe("weekly and monthly reviews", () => {
       "href",
       "#reviews/week/2026-07-26",
     );
+  });
+
+  it("keeps a stale review visible while its replacement is generated", async () => {
+    const staleArchive = {
+      reviews: archive.reviews.map((item) => ({ ...item, status: "stale" })),
+    };
+    installFetch(detail({ status: "stale" }), staleArchive);
+
+    render(<ReviewsView kind="week" period="2026-07-26" />);
+
+    expect(
+      await screen.findByText("UPDATING — SHOWING PREVIOUS VERSION"),
+    ).toBeInTheDocument();
+    const archiveNav = screen.getByRole("navigation", { name: "REVIEW ARCHIVE" });
+    expect(within(archiveNav).getByText("UPDATING")).toBeInTheDocument();
   });
 
   it("EC-5.1 renders a complete text-only review without a broken image", async () => {

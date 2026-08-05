@@ -224,6 +224,7 @@ def test_AC_4_2_archive_and_detail_are_public_projections_with_safe_evidence(tmp
             {
                 "kind": "week",
                 "period": "2026-07-26",
+                "status": "ready",
                 "start_date": "2026-07-26",
                 "end_date": "2026-08-01",
                 "title": "A week of recalibration",
@@ -237,6 +238,7 @@ def test_AC_4_2_archive_and_detail_are_public_projections_with_safe_evidence(tmp
     }
     payload = detail.json()
     assert detail.status_code == 200
+    assert payload["status"] == "ready"
     assert payload["paragraphs"] == [
         {
             "text": "A grounded paragraph.",

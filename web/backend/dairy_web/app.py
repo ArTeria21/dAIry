@@ -751,6 +751,7 @@ def _review_archive_item(record: dict[str, object]) -> dict[str, object]:
     return {
         "kind": record["kind"],
         "period": record["period"],
+        "status": record["status"],
         "start_date": record["start_date"],
         "end_date": record["end_date"],
         "title": record["title"],
@@ -800,6 +801,7 @@ def _review_detail_payload(
     return {
         "kind": record["kind"],
         "period": record["period"],
+        "status": record["status"],
         "start_date": record["start_date"],
         "end_date": record["end_date"],
         "title": record["title"],

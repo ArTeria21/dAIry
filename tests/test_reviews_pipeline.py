@@ -270,7 +270,7 @@ def test_AC_2b_3_openrouter_adapter_uses_model_strict_schemas_and_prompt_languag
         "openai/gpt-5.6-terra"
     }
     assert all(call["reasoning_effort"] == "low" for call in completions.calls)
-    assert all(call["max_completion_tokens"] == 16_000 for call in completions.calls)
+    assert all(call["max_tokens"] == 16_000 for call in completions.calls)
     assert all("temperature" not in call for call in completions.calls)
     assert all(
         call["extra_body"] == {"provider": {"require_parameters": True}}

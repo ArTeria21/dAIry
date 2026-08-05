@@ -198,6 +198,11 @@ function ReviewEssay({
         <p className={cx(chromeTextClass, "text-[10px] text-slate")}>
           {review.start_date} — {review.end_date}
         </p>
+        {review.status === "stale" ? (
+          <p className={cx(chromeTextClass, "text-[10px] text-schematic-blue")}>
+            UPDATING — SHOWING PREVIOUS VERSION
+          </p>
+        ) : null}
         <h3 className={cx(readingTextClass, "text-3xl font-medium leading-[1.11]")}>
           {review.title}
         </h3>
@@ -319,6 +324,9 @@ function ReviewArchive({
             key={item.period}
           >
             <span>{item.period}</span>
+            {item.status === "stale" ? (
+              <span className="text-schematic-blue">UPDATING</span>
+            ) : null}
             <span className="font-gerstnerprogramm normal-case">{item.title}</span>
           </a>
         ))
