@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 from uuid import uuid4
 
+import httpx
 
 PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search"
+logger = logging.getLogger(__name__)
 
 
 class SearchBudgetExceeded(RuntimeError):
@@ -87,16 +90,31 @@ class ParallelSearchRun:
         }
         if self._client.client_model is not None:
             payload["client_model"] = self._client.client_model
-        response = await self._client.http_client.post(
-            PARALLEL_SEARCH_URL,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": self._client.api_key,
-            },
-            json=payload,
-            timeout=self._client.timeout_seconds,
-        )
-        response.raise_for_status()
+        try:
+            response = await self._client.http_client.post(
+                PARALLEL_SEARCH_URL,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": self._client.api_key,
+                },
+                json=payload,
+                timeout=self._client.timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            logger.warning(
+                "Parallel search failed with HTTP %s; "
+                "continuing without external sources",
+                error.response.status_code,
+            )
+            return []
+        except httpx.RequestError as error:
+            logger.warning(
+                "Parallel search request failed (%s); "
+                "continuing without external sources",
+                type(error).__name__,
+            )
+            return []
         raw_results = response.json().get("results", [])
         sources: list[ParallelSource] = []
         for item in raw_results:

@@ -7,6 +7,8 @@ from datetime import date
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
+
 from dairy_bot.services import reviews
 
 
@@ -189,3 +191,37 @@ def test_EC_1_parallel_empty_results_returns_empty_list():
     )
 
     assert results == []
+
+
+class _ParallelPaymentRequiredResponse:
+    def raise_for_status(self) -> None:
+        request = httpx.Request("POST", "https://api.parallel.ai/v1/search")
+        response = httpx.Response(402, request=request)
+        raise httpx.HTTPStatusError(
+            "Payment Required",
+            request=request,
+            response=response,
+        )
+
+    def json(self) -> dict[str, object]:
+        raise AssertionError("A failed response must not be parsed")
+
+
+class _ParallelPaymentRequiredHTTP:
+    async def post(self, url: str, **kwargs: Any) -> _ParallelPaymentRequiredResponse:
+        return _ParallelPaymentRequiredResponse()
+
+
+def test_EC_2_parallel_http_failure_degrades_to_empty_results(caplog):
+    run = reviews.ParallelSearchClient(
+        api_key="parallel-secret",
+        http_client=_ParallelPaymentRequiredHTTP(),
+        client_model="openai/gpt-5.6-terra",
+    ).begin_run()
+
+    results = asyncio.run(
+        run.search(objective="Research context", search_queries=["relevant context"])
+    )
+
+    assert results == []
+    assert "HTTP 402" in caplog.text
